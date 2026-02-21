@@ -1,7 +1,6 @@
 # Booking.com Price Calendar
 
-A high-level user-experience experiment for Booking.com search results.  
-It adds on-the-fly hotel price context inside the date-picker so users can choose better dates faster, without needing access to the source code.
+A high-level user-experience experiment for Booking.com search results. It adds on-the-fly hotel price context inside the date-picker so users can choose better dates faster, without needing access to the source code.
 
 ## Installation
 
