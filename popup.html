@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Booking Price Calendar</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 280px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      color: #333;
+      background: #fff;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: #003580;
+      color: #fff;
+      padding: 14px 16px 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .header-icon {
+      width: 28px;
+      height: 28px;
+      flex-shrink: 0;
+    }
+
+    .header-text h1 {
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .header-text p {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-top: 1px;
+    }
+
+    /* ── Body ── */
+    .body {
+      padding: 14px 16px;
+    }
+
+    /* ── Status card ── */
+    .status-card {
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 14px;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: #ccc;
+    }
+
+    .status-dot.active   { background: #28a745; }
+    .status-dot.inactive { background: #adb5bd; }
+
+    .status-text {
+      font-weight: 600;
+      font-size: 12px;
+    }
+
+    .status-detail {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #666;
+      line-height: 1.5;
+    }
+
+    /* ── Legend ── */
+    .legend-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+      margin-bottom: 8px;
+    }
+
+    .legend-items {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      margin-bottom: 14px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .legend-chip {
+      display: inline-block;
+      width: 36px;
+      padding: 2px 4px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .chip-green  { background: rgba(33,150,83,.14); color: #1a6b3a; }
+    .chip-yellow { background: rgba(230,119, 0,.14); color: #b35800; }
+    .chip-red    { background: rgba(201, 30,30,.13); color: #a01818; }
+
+    /* ── Tip ── */
+    .tip {
+      background: #e8f0fe;
+      border-radius: 6px;
+      padding: 9px 11px;
+      font-size: 11px;
+      color: #1a56db;
+      line-height: 1.5;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      border-top: 1px solid #f0f0f0;
+      padding: 10px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .footer a {
+      font-size: 11px;
+      color: #0071c2;
+      text-decoration: none;
+    }
+
+    .footer a:hover { text-decoration: underline; }
+
+    .version {
+      font-size: 10px;
+      color: #bbb;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <!-- Simple calendar + price SVG icon -->
+    <svg class="header-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="2" y="5" width="28" height="25" rx="3" fill="white" fill-opacity="0.15"/>
+      <rect x="2" y="5" width="28" height="8"  rx="3" fill="white" fill-opacity="0.25"/>
+      <rect x="9"  y="2" width="3" height="7" rx="1.5" fill="white"/>
+      <rect x="20" y="2" width="3" height="7" rx="1.5" fill="white"/>
+      <text x="16" y="25" text-anchor="middle" font-family="sans-serif"
+            font-size="11" font-weight="bold" fill="white">$</text>
+    </svg>
+    <div class="header-text">
+      <h1>Price Calendar</h1>
+      <p>for Booking.com</p>
+    </div>
+  </div>
+
+  <div class="body">
+
+    <div class="status-card">
+      <div class="status-row">
+        <div class="status-dot" id="statusDot"></div>
+        <span class="status-text" id="statusText">Checking…</span>
+      </div>
+      <div class="status-detail" id="statusDetail"></div>
+    </div>
+
+    <div class="legend-title">Price colour guide</div>
+    <div class="legend-items">
+      <div class="legend-item">
+        <span class="legend-chip chip-green">$89</span>
+        <span>Cheapest dates (bottom third)</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-chip chip-yellow">$145</span>
+        <span>Mid-range dates</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-chip chip-red">$260</span>
+        <span>Most expensive dates (top third)</span>
+      </div>
+    </div>
+
+    <div class="tip">
+      💡 Open the date picker on any hotel search — prices will load
+      automatically on each calendar day.  Hover a day for min / avg / max.
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <a href="https://www.booking.com/searchresults.html" target="_blank" id="openBooking">
+      Open Booking.com ↗
+    </a>
+    <span class="version">v1.0.0</span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

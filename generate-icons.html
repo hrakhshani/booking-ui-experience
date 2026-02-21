@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<!--
+  Open this file in any browser to generate the required PNG icons.
+  Three files will be downloaded automatically: icon16.png, icon48.png, icon128.png.
+  Move them into the  icons/  folder of this extension.
+-->
+<html lang="en">
+<head><meta charset="utf-8"><title>Generate Icons</title></head>
+<body>
+<canvas id="c"></canvas>
+<p style="font-family:sans-serif">Icons are being downloaded — check your Downloads folder.</p>
+<script>
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+function draw (size) {
+  canvas.width  = size;
+  canvas.height = size;
+  ctx.clearRect(0, 0, size, size);
+
+  const r  = size * 0.14;   // corner radius
+  const s  = size;
+
+  /* ── Background rounded rect ── */
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.lineTo(s - r, 0);
+  ctx.quadraticCurveTo(s, 0, s, r);
+  ctx.lineTo(s, s - r);
+  ctx.quadraticCurveTo(s, s, s - r, s);
+  ctx.lineTo(r, s);
+  ctx.quadraticCurveTo(0, s, 0, s - r);
+  ctx.lineTo(0, r);
+  ctx.quadraticCurveTo(0, 0, r, 0);
+  ctx.closePath();
+  ctx.fillStyle = '#003580';
+  ctx.fill();
+
+  /* ── Header band ── */
+  ctx.fillStyle = '#0071c2';
+  ctx.fillRect(0, 0, s, s * 0.32);
+
+  /* Re-clip to rounded rect so header band doesn't poke out */
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.lineTo(s - r, 0);
+  ctx.quadraticCurveTo(s, 0, s, r);
+  ctx.lineTo(s, s - r);
+  ctx.quadraticCurveTo(s, s, s - r, s);
+  ctx.lineTo(r, s);
+  ctx.quadraticCurveTo(0, s, 0, s - r);
+  ctx.lineTo(0, r);
+  ctx.quadraticCurveTo(0, 0, r, 0);
+  ctx.closePath();
+  ctx.clip();
+
+  /* ── Two ring pins ── */
+  ctx.fillStyle = '#fff';
+  const pinR = s * 0.07;
+  const pinY = s * 0.10;
+  [[s * 0.30, pinY], [s * 0.70, pinY]].forEach(([x, y]) => {
+    ctx.beginPath();
+    ctx.arc(x, y, pinR, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  /* ── Dollar sign ── */
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${Math.round(s * 0.48)}px serif`;
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('$', s * 0.5, s * 0.63);
+}
+
+async function generate () {
+  for (const size of [16, 48, 128]) {
+    draw(size);
+    const dataUrl = canvas.toDataURL('image/png');
+
+    // Create a temporary anchor and click it to trigger download
+    const a = document.createElement('a');
+    a.href     = dataUrl;
+    a.download = `icon${size}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    // Small pause between downloads to avoid browser blocking them
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  document.querySelector('p').textContent =
+    'Done! Move icon16.png, icon48.png, and icon128.png into the icons/ folder.';
+}
+
+generate();
+</script>
+</body>
+</html>

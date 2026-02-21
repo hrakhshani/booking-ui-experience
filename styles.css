@@ -1,0 +1,176 @@
+/* ============================================================
+   Booking.com Price Calendar Extension – Injected Styles
+   ============================================================ */
+
+/* ── Price badge container ───────────────────────────────── */
+.bpc-price-badge {
+  position: absolute;
+  bottom: 2px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  z-index: 6;
+  pointer-events: none;   /* no mouse events until a price is loaded */
+  line-height: 1;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.bpc-price-badge.bpc-loaded {
+  pointer-events: auto;   /* enable hover once price data is ready */
+  cursor: default;
+}
+
+/* ── Minimum-price chip (always visible on the cell) ─────── */
+.bpc-price-badge .bpc-min {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.4;
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+
+  /* Default: Booking.com blue tint */
+  background: rgba(0, 53, 128, 0.11);
+  color: #003580;
+  transition: background 0.2s, color 0.2s;
+}
+
+/* ── Color tiers ─────────────────────────────────────────── */
+.bpc-price-badge.bpc-green .bpc-min {
+  background: rgba(33, 150, 83, 0.14);
+  color: #1a6b3a;
+}
+
+.bpc-price-badge.bpc-yellow .bpc-min {
+  background: rgba(230, 119, 0, 0.14);
+  color: #b35800;
+}
+
+.bpc-price-badge.bpc-red .bpc-min {
+  background: rgba(201, 30, 30, 0.13);
+  color: #a01818;
+}
+
+/* ── Loading spinner ─────────────────────────────────────── */
+.bpc-price-badge .bpc-loading {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(33, 150, 83, 0.25);
+  border-top-color: #219653;
+  animation: bpc-spin 0.75s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes bpc-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Tooltip (appears on hover of a loaded badge) ────────── */
+.bpc-price-badge .bpc-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 99999;
+
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.13);
+  padding: 10px 14px;
+  min-width: 158px;
+  text-align: left;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Show tooltip on hover */
+.bpc-price-badge.bpc-loaded:hover .bpc-tooltip {
+  display: block;
+}
+
+/* Tiny arrow pointing down toward the cell */
+.bpc-price-badge .bpc-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: #fff;
+  filter: drop-shadow(0 1px 0 #e0e0e0);
+}
+
+/* ── Tooltip internals ───────────────────────────────────── */
+.bpc-tt-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 7px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #f2f2f2;
+}
+
+.bpc-tt-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 5px;
+  font-size: 12px;
+}
+
+.bpc-tt-row:last-child {
+  margin-bottom: 0;
+}
+
+.bpc-tt-label {
+  color: #888;
+  font-weight: 400;
+}
+
+.bpc-tt-val {
+  color: #003580;
+  font-weight: 700;
+}
+
+/* ── Color dot on the Min row inside tooltip ─────────────── */
+.bpc-price-badge.bpc-green .bpc-tt-val { color: #1a6b3a; }
+.bpc-price-badge.bpc-yellow .bpc-tt-val { color: #b35800; }
+.bpc-price-badge.bpc-red .bpc-tt-val { color: #a01818; }
+
+/* ── Ensure the tooltip does not get clipped on edge cells ── */
+/* Left-edge cells: push tooltip to the right */
+td:first-child .bpc-price-badge .bpc-tooltip,
+td:nth-child(2) .bpc-price-badge .bpc-tooltip {
+  left: 0;
+  transform: none;
+}
+
+td:first-child .bpc-price-badge .bpc-tooltip::after,
+td:nth-child(2) .bpc-price-badge .bpc-tooltip::after {
+  left: 20px;
+  transform: none;
+}
+
+/* Right-edge cells: push tooltip to the left */
+td:last-child .bpc-price-badge .bpc-tooltip,
+td:nth-last-child(2) .bpc-price-badge .bpc-tooltip {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+td:last-child .bpc-price-badge .bpc-tooltip::after,
+td:nth-last-child(2) .bpc-price-badge .bpc-tooltip::after {
+  left: auto;
+  right: 14px;
+  transform: none;
+}
