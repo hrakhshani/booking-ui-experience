@@ -1,16 +1,25 @@
 # Booking.com Price Calendar
 
-A Chrome extension that overlays hotel price statistics (min / avg / max) on the Booking.com date-picker calendar — the same experience Google Flights offers for flights.
+A high-level user-experience experiment for Booking.com search results.  
+It adds on-the-fly hotel price context inside the date-picker so users can choose better dates faster, without needing access to the source code.
 
-## What it does
+## High-level experiment
 
-| Without extension | With extension |
+### Purpose
+
+- Bring a new “price-aware calendar” experience to hotel date selection.
+- Reduce manual date-by-date comparison work.
+- Help users identify better-value days in seconds.
+
+### What changes for users
+
+| Standard calendar | Experimental experience |
 |---|---|
-| Calendar shows only dates | Each day shows the **cheapest hotel price** for that check-in date |
-| You must change dates manually to compare | Colour-coded green / yellow / red at a glance |
-| No quick way to spot the best-value day | Hover any day for a **min / avg / max tooltip** |
+| Calendar shows only dates | Each day shows the **lowest visible hotel price** for that check-in date |
+| Date comparison is mostly manual | Colour-coded green / yellow / red signals value at a glance |
+| Hard to estimate price distribution quickly | Hover any day to view **min / avg / max** summary |
 
-### Screenshot (after install)
+### Example view (after install)
 
 ```
 ┌─────────────────────────────┐
@@ -24,7 +33,7 @@ A Chrome extension that overlays hotel price statistics (min / avg / max) on the
   ↑ green           ↑ red
 ```
 
-Prices shown are the **minimum hotel price** across the first page of results for that check-in date, keeping the same number of nights as your current search.
+Prices shown are calculated from the first page of Booking.com results for each check-in date, while keeping the same trip length from the active search.
 
 ---
 
