@@ -3,40 +3,6 @@
 A high-level user-experience experiment for Booking.com search results.  
 It adds on-the-fly hotel price context inside the date-picker so users can choose better dates faster, without needing access to the source code.
 
-## High-level experiment
-
-### Purpose
-
-- Bring a new “price-aware calendar” experience to hotel date selection.
-- Reduce manual date-by-date comparison work.
-- Help users identify better-value days in seconds.
-
-### What changes for users
-
-| Standard calendar | Experimental experience |
-|---|---|
-| Calendar shows only dates | Each day shows the **lowest visible hotel price** for that check-in date |
-| Date comparison is mostly manual | Colour-coded green / yellow / red signals value at a glance |
-| Hard to estimate price distribution quickly | Hover any day to view **min / avg / max** summary |
-
-### Example view (after install)
-
-```
-┌─────────────────────────────┐
-│  ◀  February 2026  ▶        │
-├────┬────┬────┬────┬────┬────┤
-│ Mon│ Tue│ Wed│ Thu│ Fri│ Sat│
-├────┼────┼────┼────┼────┼────┤
-│ 16 │ 17 │ 18 │ 19 │ 20 │ 21 │
-│$89 │$104│$97 │$210│$185│$92 │  ← price badges
-└────┴────┴────┴────┴────┴────┘
-  ↑ green           ↑ red
-```
-
-Prices shown are calculated from the first page of Booking.com results for each check-in date, while keeping the same trip length from the active search.
-
----
-
 ## Installation
 
 ### Step 1 – Generate the icons
