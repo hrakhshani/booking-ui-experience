@@ -37,20 +37,42 @@
   transition: background 0.2s, color 0.2s;
 }
 
+/* ── Calendar cell background highlights ─────────────────── */
+/* The class is added to the direct parent of the badge.
+   We also target > button in case Booking.com wraps the day
+   number in a button inside the cell element. */
+.bpc-cell-green,
+.bpc-cell-green > button {
+  background: rgba(22, 163, 74, 0.15) !important;
+}
+
+.bpc-cell-yellow,
+.bpc-cell-yellow > button {
+  background: rgba(202, 138, 4, 0.13) !important;
+}
+
+.bpc-cell-orange,
+.bpc-cell-orange > button {
+  background: rgba(234, 88, 12, 0.15) !important;
+}
+
 /* ── Color tiers ─────────────────────────────────────────── */
 .bpc-price-badge.bpc-green .bpc-min {
-  background: rgba(33, 150, 83, 0.14);
-  color: #1a6b3a;
+  background: rgba(22, 163, 74, 0.18);
+  color: #15803d;
+  box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.25);
 }
 
 .bpc-price-badge.bpc-yellow .bpc-min {
-  background: rgba(230, 119, 0, 0.14);
-  color: #b35800;
+  background: rgba(202, 138, 4, 0.16);
+  color: #a16207;
+  box-shadow: 0 0 0 1px rgba(202, 138, 4, 0.25);
 }
 
-.bpc-price-badge.bpc-red .bpc-min {
-  background: rgba(201, 30, 30, 0.13);
-  color: #a01818;
+.bpc-price-badge.bpc-orange .bpc-min {
+  background: rgba(234, 88, 12, 0.18);
+  color: #c2410c;
+  box-shadow: 0 0 0 1px rgba(234, 88, 12, 0.25);
 }
 
 /* ── Loading spinner ─────────────────────────────────────── */
@@ -142,9 +164,9 @@
 }
 
 /* ── Color dot on the Min row inside tooltip ─────────────── */
-.bpc-price-badge.bpc-green .bpc-tt-val { color: #1a6b3a; }
-.bpc-price-badge.bpc-yellow .bpc-tt-val { color: #b35800; }
-.bpc-price-badge.bpc-red .bpc-tt-val { color: #a01818; }
+.bpc-price-badge.bpc-green .bpc-tt-val { color: #15803d; }
+.bpc-price-badge.bpc-yellow .bpc-tt-val { color: #a16207; }
+.bpc-price-badge.bpc-orange .bpc-tt-val { color: #c2410c; }
 
 /* ── Ensure the tooltip does not get clipped on edge cells ── */
 /* Left-edge cells: push tooltip to the right */

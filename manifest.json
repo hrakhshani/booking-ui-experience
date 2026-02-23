@@ -3,7 +3,7 @@
   "name": "Booking.com Price Calendar",
   "version": "1.0.0",
   "description": "Shows hotel price stats (min/avg/max) on the Booking.com date picker — like Google Flights' price calendar.",
-  "permissions": ["activeTab", "tabs"],
+  "permissions": ["activeTab", "tabs", "storage"],
   "host_permissions": ["https://www.booking.com/*"],
   "content_scripts": [
     {

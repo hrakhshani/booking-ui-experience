@@ -4,6 +4,20 @@ const dot    = document.getElementById('statusDot');
 const text   = document.getElementById('statusText');
 const detail = document.getElementById('statusDetail');
 
+// ── Sort-by-price toggle ──────────────────────────────────────────────────────
+
+const sortToggle = document.getElementById('sortByPrice');
+
+// Load saved setting and initialise toggle
+chrome.storage.sync.get({ sortByPrice: true }, ({ sortByPrice }) => {
+  sortToggle.checked = sortByPrice;
+});
+
+// Persist when changed
+sortToggle.addEventListener('change', () => {
+  chrome.storage.sync.set({ sortByPrice: sortToggle.checked });
+});
+
 chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
   if (!tab) return;
 

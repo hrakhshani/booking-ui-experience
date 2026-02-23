@@ -20,6 +20,15 @@
 
   // ─── Runtime state ──────────────────────────────────────────────────────────
 
+  /** Whether to sort fetched results by price (loaded from storage) */
+  let sortByPrice = true;
+
+  // Keep in sync with popup toggle changes (no page reload needed)
+  chrome.storage.sync.get({ sortByPrice: true }, (s) => { sortByPrice = s.sortByPrice; });
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.sortByPrice) sortByPrice = changes.sortByPrice.newValue;
+  });
+
   /** Parsed params from the current search URL */
   let searchParams = null;
 
@@ -144,6 +153,7 @@
     s.set('group_adults',   p.adults);
     s.set('group_children', p.children);
     s.set('no_rooms',       p.rooms);
+    if (sortByPrice) s.set('order', 'price');
 
     return u.toString();
   }
@@ -633,35 +643,52 @@
   }
 
   /**
-   * Color-code loaded badges green/yellow/red based on their relative position
-   * in the distribution of minimum prices across all loaded dates.
+   * Color-code loaded badges green/yellow/orange based on their relative
+   * position in the distribution of minimum prices across all loaded dates.
+   * Works on both search-results pages (searchParams set) and the homepage
+   * (selectedCheckin set after a date click).
    */
   function applyColorCoding () {
-    if (!searchParams) return;
+    // Need at least a search context OR a user-selected checkin to make sense
+    if (!searchParams && !selectedCheckin) return;
 
     const loaded = Array.from(document.querySelectorAll(`.${BADGE_CLASS}.bpc-loaded`));
     if (loaded.length < 3) return;
 
     const mins = loaded
       .map(b => {
-        const { checkin, checkout } = getBadgeDates(b);
-        return priceCache.get(cacheKey(checkin, checkout))?.min ?? Infinity;
+        const dates = getBadgeDates(b);
+        if (!dates) return Infinity;
+        return priceCache.get(cacheKey(dates.checkin, dates.checkout))?.min ?? Infinity;
       })
       .filter(v => isFinite(v))
       .sort((a, b) => a - b);
+
+    if (mins.length < 3) return;
 
     const lo = mins[Math.floor(mins.length * 0.33)];
     const hi = mins[Math.floor(mins.length * 0.66)];
 
     loaded.forEach(b => {
-      const { checkin, checkout } = getBadgeDates(b);
-      const min = priceCache.get(cacheKey(checkin, checkout))?.min;
+      const dates = getBadgeDates(b);
+      if (!dates) return;
+      const min = priceCache.get(cacheKey(dates.checkin, dates.checkout))?.min;
       if (min === undefined) return;
 
-      b.classList.remove('bpc-green', 'bpc-yellow', 'bpc-red');
-      if (min <= lo)      b.classList.add('bpc-green');
-      else if (min >= hi) b.classList.add('bpc-red');
-      else                b.classList.add('bpc-yellow');
+      const cell = b.parentElement;
+      b.classList.remove('bpc-green', 'bpc-yellow', 'bpc-orange', 'bpc-red');
+      cell && cell.classList.remove('bpc-cell-green', 'bpc-cell-yellow', 'bpc-cell-orange');
+
+      if (min <= lo) {
+        b.classList.add('bpc-green');
+        cell && cell.classList.add('bpc-cell-green');
+      } else if (min >= hi) {
+        b.classList.add('bpc-orange');
+        cell && cell.classList.add('bpc-cell-orange');
+      } else {
+        b.classList.add('bpc-yellow');
+        cell && cell.classList.add('bpc-cell-yellow');
+      }
     });
   }
 
@@ -697,6 +724,7 @@
     s.set('group_adults',   '2');
     s.set('no_rooms',       '1');
     s.set('group_children', '0');
+    if (sortByPrice) s.set('order', 'price');
 
     return u.toString();
   }
