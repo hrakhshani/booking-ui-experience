@@ -1226,9 +1226,11 @@
           }
           await sleep(1200);
 
+          const facilityGroups = extractFacilityGroups(iDoc);
           finish({
             popularFacilities: extractPopularFacilities(iDoc),
-            facilityGroups:    extractFacilityGroups(iDoc),
+            facilityGroups,
+            facilityLines:     flattenFacilityGroupLines(facilityGroups),
             areaInfo:          extractAreaInfo(iDoc),
           });
         } catch (err) {
@@ -1341,9 +1343,11 @@
       let doc = await fetchPage();
       if (!doc) return null;
 
+      const facilityGroups = extractFacilityGroups(doc);
       let details = {
         popularFacilities: extractPopularFacilities(doc),
-        facilityGroups:    extractFacilityGroups(doc),
+        facilityGroups,
+        facilityLines:     flattenFacilityGroupLines(facilityGroups),
         areaInfo:          extractAreaInfo(doc),
       };
 
@@ -1357,9 +1361,11 @@
         await sleep(DETAIL_LOAD_DELAY_MS);
         const doc2 = await fetchPage('?lang=en-us');
         if (doc2) {
+          const facilityGroups2 = extractFacilityGroups(doc2);
           const d2 = {
             popularFacilities: extractPopularFacilities(doc2),
-            facilityGroups:    extractFacilityGroups(doc2),
+            facilityGroups:    facilityGroups2,
+            facilityLines:     flattenFacilityGroupLines(facilityGroups2),
             areaInfo:          extractAreaInfo(doc2),
           };
           if (d2.facilityGroups.length || d2.popularFacilities.length || d2.areaInfo.length) {
@@ -1376,6 +1382,7 @@
         details = {
           popularFacilities: mergeUniqueStrings(details.popularFacilities, iframeDetails.popularFacilities),
           facilityGroups:    mergeFacilityGroups(details.facilityGroups, iframeDetails.facilityGroups),
+          facilityLines:     mergeUniqueStrings(details.facilityLines, iframeDetails.facilityLines),
           areaInfo:          mergeAreaInfo(details.areaInfo, iframeDetails.areaInfo),
         };
       }
@@ -1409,19 +1416,58 @@
     } catch (_) { return null; }
   }
 
+  function normalizeFacilityText (text) {
+    return typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : '';
+  }
+
+  function getElementLines (el, splitLines = true) {
+    if (!el) return [];
+    const raw = (typeof el.innerText === 'string' ? el.innerText : el.textContent) || '';
+    if (!raw) return [];
+    const chunks = splitLines ? raw.split('\n') : [raw];
+    return chunks.map(normalizeFacilityText).filter(Boolean);
+  }
+
+  function uniqueFacilityLines (lines) {
+    const out = [];
+    const seen = new Set();
+    (lines || []).forEach(line => {
+      const text = normalizeFacilityText(line);
+      if (!text) return;
+      const key = text.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(text);
+    });
+    return out;
+  }
+
+  function flattenFacilityGroupLines (groups) {
+    const lines = [];
+    (groups || []).forEach(group => {
+      const name = normalizeFacilityText(group?.name || '');
+      const description = normalizeFacilityText(group?.description || '');
+      if (name) lines.push(name);
+      if (description) lines.push(description);
+      (group?.facilities || []).forEach(f => lines.push(f));
+    });
+    return uniqueFacilityLines(lines);
+  }
+
   /** Most-popular-facilities list: [data-testid="property-most-popular-facilities-wrapper"] */
   function extractPopularFacilities (doc) {
     // Primary: named wrapper with known child class
     const primary = Array.from(
       doc.querySelectorAll('[data-testid="property-most-popular-facilities-wrapper"] .f6b6d2a959')
-    ).map(el => el.textContent.trim()).filter(Boolean);
-    if (primary.length) return primary;
+    ).flatMap(el => getElementLines(el, true));
+    if (primary.length) return uniqueFacilityLines(primary);
 
     // Fallback: any element whose data-testid contains "facility" and has text
-    const fallback = Array.from(
+    const fallback = uniqueFacilityLines(Array.from(
       doc.querySelectorAll('[data-testid*="facility"] li, [data-testid*="facility"] span')
-    ).map(el => el.textContent.trim()).filter(t => t.length > 1 && t.length < 60);
-    return [...new Set(fallback)];
+    ).flatMap(el => getElementLines(el, true)))
+      .filter(t => t.length > 1 && t.length < 60);
+    return fallback;
   }
 
   /** All facility groups and their items from the Facilities section */
@@ -1430,26 +1476,22 @@
     doc.querySelectorAll('[data-testid="facility-group-container"]').forEach(group => {
       const titleEl = group.querySelector('h3');
       if (!titleEl) return;
-      const name = titleEl.textContent.trim();
+      const name = getElementLines(titleEl, false)[0] || '';
       if (!name) return;
 
       // Description text inside header (if exists)
       const descEl = group.querySelector('h3 + div, h3 div + div');
-      const description = descEl ? descEl.textContent.trim() : '';
+      const description = descEl ? getElementLines(descEl, false)[0] || '' : '';
 
       // All facility list items
       const facilities = [];
       group.querySelectorAll('li').forEach(item => {
-        const text = item.textContent.trim();
-        if (text) {
-          text.split('\n').forEach(line => {
-            if (line.trim()) facilities.push(line.trim());
-          });
-        }
+        facilities.push(...getElementLines(item, true));
       });
 
-      if (facilities.length || description) {
-        groups.push({ name, facilities, description });
+      const uniqueFacilities = uniqueFacilityLines(facilities);
+      if (uniqueFacilities.length || description) {
+        groups.push({ name, facilities: uniqueFacilities, description });
       }
     });
 
@@ -1759,48 +1801,126 @@
     return groups;
   }
 
-  /** Update the async detail cells for one hotel (by its column index) */
-  function updateModalDetailCells (modal, idx, details) {
-    const set = (field, html) =>
-      modal.querySelectorAll(`[data-bpc-idx="${idx}"][data-bpc-field="${field}"]`)
-        .forEach(td => { td.innerHTML = html; });
-
-    const facs = details.popularFacilities;
-    set('facilities', facs.length
-      ? `<div class="bpc-facility-tags">${facs.map(f => `<span class="bpc-facility-tag">${esc(f)}</span>`).join('')}</div>`
-      : '—');
-
-    console.debug('[BPC] Rendering facilityGroups for hotel idx', idx, details.facilityGroups);
-    set('facilityGroups', renderFacilityGroups(details.facilityGroups));
-
-    const find = kw => details.areaInfo.find(c => new RegExp(kw, 'i').test(c.name))?.pois ?? [];
-    set('attractions', renderPoiList(find('attraction').slice(0, 4)));
-    set('transit',     renderPoiList(find('public\\s*transit|public\\s*transport|transit|transport|station|metro|subway|tram|train|bus').slice(0, 4)));
-    set('airport',     renderPoiList(find('airport').slice(0, 2)));
+  function createFeatureSectionBucket (name) {
+    return { name, rows: new Map() };
   }
 
-  function renderPoiList (pois) {
-    if (!pois.length) return '—';
-    return `<ul class="bpc-poi-list">${pois.map(p => `
-      <li class="bpc-poi-item">
-        ${p.type ? `<span class="bpc-poi-type">${esc(p.type)}</span>` : ''}
-        <span class="bpc-poi-name">${esc(p.name)}</span>
-        <span class="bpc-poi-dist">${esc(p.distance)}</span>
-      </li>`).join('')}</ul>`;
+  function createFeatureRowBucket (label, type) {
+    return { label, type, values: Array(compareList.length).fill(undefined) };
   }
 
-  function renderFacilityGroups (groups) {
-    if (!groups || !groups.length) return '—';
-    return `<div class="bpc-facility-groups">${
-      groups.map(g => `
-        <div class="bpc-fg-group">
-          <div class="bpc-fg-name">${esc(g.name)}</div>
-          ${g.description ? `<div class="bpc-fg-desc">${esc(g.description)}</div>` : ''}
-          ${g.facilities.length ? `<div class="bpc-fg-items">${
-            g.facilities.map(f => `<span class="bpc-facility-tag">${esc(f)}</span>`).join('')
-          }</div>` : ''}
-        </div>`).join('')
-    }</div>`;
+  function getOrCreateFeatureSection (sectionsByKey, sectionName) {
+    const normalized = normalizeFacilityText(sectionName) || 'Features';
+    const key = normalized.toLowerCase();
+    if (!sectionsByKey.has(key)) {
+      sectionsByKey.set(key, createFeatureSectionBucket(normalized));
+    }
+    return sectionsByKey.get(key);
+  }
+
+  function addFeatureValue (sectionsByKey, sectionName, featureLabel, hotelIdx, value, type = 'boolean') {
+    const label = normalizeFacilityText(featureLabel);
+    if (!label) return;
+    const section = getOrCreateFeatureSection(sectionsByKey, sectionName);
+    const rowKey = label.toLowerCase();
+    if (!section.rows.has(rowKey)) {
+      section.rows.set(rowKey, createFeatureRowBucket(label, type));
+    }
+    const row = section.rows.get(rowKey);
+    if (row.values[hotelIdx] === undefined) {
+      row.values[hotelIdx] = value;
+      return;
+    }
+    if (row.type === 'value' && typeof value === 'string' && value && row.values[hotelIdx] !== value) {
+      row.values[hotelIdx] = value;
+    }
+  }
+
+  function buildFeatureSections (detailsByHotel) {
+    const sectionsByKey = new Map();
+
+    detailsByHotel.forEach((details, idx) => {
+      if (!details) return;
+
+      (details.popularFacilities || []).forEach(item => {
+        addFeatureValue(sectionsByKey, 'Top Facilities', item, idx, true, 'boolean');
+      });
+
+      (details.facilityGroups || []).forEach(group => {
+        const sectionName = normalizeFacilityText(group?.name) || 'Facilities';
+        (group?.facilities || []).forEach(item => {
+          addFeatureValue(sectionsByKey, sectionName, item, idx, true, 'boolean');
+        });
+      });
+
+      (details.areaInfo || []).forEach(category => {
+        const sectionName = normalizeFacilityText(category?.name) || 'Nearby Places';
+        (category?.pois || []).forEach(poi => {
+          const name = normalizeFacilityText(poi?.name);
+          if (!name) return;
+          const typeLabel = normalizeFacilityText(poi?.type);
+          const rowLabel = typeLabel ? `${typeLabel}: ${name}` : name;
+          const distance = normalizeFacilityText(poi?.distance);
+          addFeatureValue(sectionsByKey, sectionName, rowLabel, idx, distance || '', 'value');
+        });
+      });
+    });
+
+    return Array.from(sectionsByKey.values())
+      .map(section => ({
+        name: section.name,
+        rows: Array.from(section.rows.values())
+          .filter(row => row.values.some(v => v !== undefined && v !== null && v !== ''))
+          .sort((a, b) => a.label.localeCompare(b.label)),
+      }))
+      .filter(section => section.rows.length > 0)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  function renderFeatureCell (value, rowType, isPending) {
+    if (isPending) return '<span class="bpc-feature-loading" aria-label="Loading"></span>';
+    if (rowType === 'boolean') {
+      if (value === true) return '<span class="bpc-feature-check" aria-label="Available">☑</span>';
+      return '<span class="bpc-feature-missing">-</span>';
+    }
+    if (typeof value === 'string' && value.trim()) return esc(value);
+    if (typeof value === 'number' && Number.isFinite(value)) return esc(String(value));
+    return '<span class="bpc-feature-missing">-</span>';
+  }
+
+  function renderFeatureMatrix (detailsByHotel, pendingCount) {
+    const sections = buildFeatureSections(detailsByHotel);
+    if (!sections.length) {
+      if (pendingCount > 0) {
+        return '<div class="bpc-feature-empty">Loading hotel features…</div>';
+      }
+      return '<div class="bpc-feature-empty">No detailed features were found for these hotels.</div>';
+    }
+
+    return sections.map(section => `
+      <div class="bpc-feature-section">
+        <div class="bpc-feature-section-title">${esc(section.name)}</div>
+        <table class="bpc-feature-table">
+          <tbody>
+            ${section.rows.map(row => `
+              <tr>
+                <td class="bpc-feature-key">${esc(row.label)}</td>
+                ${compareList.map((_, idx) => `
+                  <td class="bpc-feature-value">${renderFeatureCell(
+                    row.values[idx],
+                    row.type,
+                    row.values[idx] === undefined && detailsByHotel[idx] === undefined
+                  )}</td>`).join('')}
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`).join('');
+  }
+
+  function updateFeatureMatrix (modal, detailsByHotel, pendingCount) {
+    const mount = modal.querySelector('[data-bpc-feature-matrix]');
+    if (!mount) return;
+    mount.innerHTML = renderFeatureMatrix(detailsByHotel, pendingCount);
   }
 
   // ─── Compare Modal ────────────────────────────────────────────────────────────
@@ -1817,27 +1937,18 @@
     const fields = [
       { label: 'Stars',    render: h => h.stars
           ? '★'.repeat(h.stars) + '<span class="bpc-star-empty">★</span>'.repeat(Math.max(0, 5 - h.stars))
-          : '—' },
+          : '-' },
       { label: 'Score',    render: h => h.score
           ? `<strong class="bpc-modal-score">${esc(h.score)}</strong> <span class="bpc-score-lbl">${esc(h.scoreLabel)}</span><br><small>${esc(h.reviewCount)}</small>`
-          : '—' },
-      { label: 'Location', render: h => esc(h.location) || '—' },
-      { label: 'Distance', render: h => esc(h.distance) || '—' },
-      { label: 'Room',     render: h => esc(h.room)     || '—' },
+          : '-' },
+      { label: 'Location', render: h => esc(h.location) || '-' },
+      { label: 'Distance', render: h => esc(h.distance) || '-' },
+      { label: 'Room',     render: h => esc(h.room)     || '-' },
       { label: 'Price',    render: h => h.price
-          ? `<strong class="bpc-modal-price">${esc(h.price)}</strong>` : '—' },
-      { label: 'Was',      render: h => h.origPrice ? `<s>${esc(h.origPrice)}</s>` : '—' },
-      { label: 'Duration', render: h => esc(h.nights)   || '—' },
-      { label: 'Payment',  render: h => esc(h.payment)  || '—' },
-    ];
-
-    // Async detail rows – filled in after hotel pages are fetched
-    const detailRows = [
-      { field: 'facilities',     label: 'Top Facilities' },
-      { field: 'facilityGroups', label: 'Facilities'     },
-      { field: 'attractions',    label: 'Attractions'    },
-      { field: 'transit',        label: 'Public Transit' },
-      { field: 'airport',        label: 'Airport'        },
+          ? `<strong class="bpc-modal-price">${esc(h.price)}</strong>` : '-' },
+      { label: 'Was',      render: h => h.origPrice ? `<s>${esc(h.origPrice)}</s>` : '-' },
+      { label: 'Duration', render: h => esc(h.nights)   || '-' },
+      { label: 'Payment',  render: h => esc(h.payment)  || '-' },
     ];
 
     modal.innerHTML = `
@@ -1869,17 +1980,16 @@
                 </tr>`).join('')}
               <tr class="bpc-section-divider">
                 <td colspan="${compareList.length + 1}">
-                  More Details <span class="bpc-fetching-notice">loading…</span>
+                  Feature Comparison <span class="bpc-fetching-notice">loading…</span>
                 </td>
               </tr>
-              ${detailRows.map(({ field, label }) => `
-                <tr>
-                  <td class="bpc-ct-label-col">${esc(label)}</td>
-                  ${compareList.map((_, i) => `
-                    <td data-bpc-idx="${i}" data-bpc-field="${field}">
-                      <div class="bpc-loading"></div>
-                    </td>`).join('')}
-                </tr>`).join('')}
+              <tr>
+                <td colspan="${compareList.length + 1}" class="bpc-feature-matrix-cell">
+                  <div class="bpc-feature-matrix" data-bpc-feature-matrix>
+                    <div class="bpc-feature-empty">Loading hotel features…</div>
+                  </div>
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -1895,21 +2005,17 @@
 
     document.body.appendChild(modal);
 
-    // Fetch each hotel's detail page in parallel and fill in the async rows
+    // Fetch each hotel's detail page in parallel and build section-wise feature matrix
     let remaining = compareList.length;
-    const allFields = detailRows.map(r => r.field);
+    const detailsByHotel = Array(compareList.length).fill(undefined);
+    updateFeatureMatrix(modal, detailsByHotel, remaining);
     compareList.forEach((h, idx) => {
       fetchHotelDetails(h.url).then(details => {
         if (!document.getElementById(COMPARE_MODAL_ID)) return; // modal was closed
-        if (details) {
-          updateModalDetailCells(modal, idx, details);
-        } else {
-          allFields.forEach(field =>
-            modal.querySelectorAll(`[data-bpc-idx="${idx}"][data-bpc-field="${field}"]`)
-              .forEach(td => { td.textContent = '—'; })
-          );
-        }
-        if (--remaining === 0) modal.querySelector('.bpc-fetching-notice')?.remove();
+        detailsByHotel[idx] = details || null;
+        remaining -= 1;
+        updateFeatureMatrix(modal, detailsByHotel, remaining);
+        if (remaining === 0) modal.querySelector('.bpc-fetching-notice')?.remove();
       });
     });
   }
