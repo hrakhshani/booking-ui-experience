@@ -1232,6 +1232,7 @@
             facilityGroups,
             facilityLines:     flattenFacilityGroupLines(facilityGroups),
             areaInfo:          extractAreaInfo(iDoc),
+            photoUrls:         extractHotelPhotos(iDoc),
           });
         } catch (err) {
           console.warn('[BPC] iframe extraction error:', err);
@@ -1319,6 +1320,78 @@
     return order.map(key => mergedByCategory.get(key)).filter(cat => cat.pois.length);
   }
 
+  function normalizeHotelPhotoUrl (url) {
+    if (typeof url !== 'string') return '';
+    const raw = url.trim();
+    if (!raw) return '';
+    try {
+      const parsed = new URL(raw, location.origin);
+      if (!/^https?:$/i.test(parsed.protocol)) return '';
+      if (!/\/images\/hotel\//i.test(parsed.pathname)) return '';
+      parsed.hash = '';
+      parsed.pathname = parsed.pathname.replace(/\/max\d+(x\d+)?\//i, '/max1024x768/');
+      return parsed.toString();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function getHotelPhotoKey (url) {
+    try {
+      const parsed = new URL(url, location.origin);
+      const idMatch = parsed.pathname.match(/\/(\d+)\.(?:jpg|jpeg|png|webp)$/i);
+      if (idMatch) return idMatch[1];
+      return parsed.pathname.replace(/\/max\d+(x\d+)?\//i, '/max/');
+    } catch (_) {
+      return url;
+    }
+  }
+
+  function mergePhotoUrls (base, extra, maxCount = 12) {
+    const out = [];
+    const seen = new Set();
+    [base, extra].forEach(list => {
+      (list || []).forEach(url => {
+        const normalized = normalizeHotelPhotoUrl(url);
+        if (!normalized) return;
+        const key = getHotelPhotoKey(normalized);
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(normalized);
+      });
+    });
+    return out.slice(0, maxCount);
+  }
+
+  function extractHotelPhotos (doc) {
+    if (!doc) return [];
+    const rawUrls = [];
+    const selectors = [
+      '[data-testid*="gallery"] img',
+      '[data-testid*="photo"] img',
+      '[data-testid*="image"] img',
+      'img[src*="/images/hotel/"]',
+      'img[data-src*="/images/hotel/"]',
+    ];
+
+    selectors.forEach(sel => {
+      doc.querySelectorAll(sel).forEach(img => {
+        rawUrls.push(
+          img.currentSrc ||
+          img.getAttribute('src') ||
+          img.getAttribute('data-src') ||
+          img.getAttribute('data-lazy-src') ||
+          ''
+        );
+      });
+    });
+
+    const ogImage = doc.querySelector('meta[property="og:image"]')?.getAttribute('content') || '';
+    if (ogImage) rawUrls.push(ogImage);
+
+    return mergePhotoUrls([], rawUrls);
+  }
+
   /** Fetch and parse detailed info (facilities, area POIs) from a hotel page */
   async function fetchHotelDetails (url) {
     // Strip query params so we get the full hotel info page, not a booking-flow view
@@ -1349,6 +1422,7 @@
         facilityGroups,
         facilityLines:     flattenFacilityGroupLines(facilityGroups),
         areaInfo:          extractAreaInfo(doc),
+        photoUrls:         extractHotelPhotos(doc),
       };
 
       // If the detailed sections are missing the page may not have included the
@@ -1367,8 +1441,9 @@
             facilityGroups:    facilityGroups2,
             facilityLines:     flattenFacilityGroupLines(facilityGroups2),
             areaInfo:          extractAreaInfo(doc2),
+            photoUrls:         extractHotelPhotos(doc2),
           };
-          if (d2.facilityGroups.length || d2.popularFacilities.length || d2.areaInfo.length) {
+          if (d2.facilityGroups.length || d2.popularFacilities.length || d2.areaInfo.length || d2.photoUrls.length) {
             details = d2;
             doc     = doc2;
           }
@@ -1384,6 +1459,7 @@
           facilityGroups:    mergeFacilityGroups(details.facilityGroups, iframeDetails.facilityGroups),
           facilityLines:     mergeUniqueStrings(details.facilityLines, iframeDetails.facilityLines),
           areaInfo:          mergeAreaInfo(details.areaInfo, iframeDetails.areaInfo),
+          photoUrls:         mergePhotoUrls(details.photoUrls, iframeDetails.photoUrls),
         };
       }
 
@@ -1407,6 +1483,7 @@
         popularFacilities:            details.popularFacilities,
         facilityGroups:               details.facilityGroups,
         areaInfoCategories:           details.areaInfo.map(c => c.name),
+        photoCount:                   details.photoUrls.length,
         facilityGroupContainerCount:  doc.querySelectorAll('[data-testid="facility-group-container"]').length,
         hasApolloCache:               !!apolloText,
         apolloFacilityInfo,
@@ -1923,6 +2000,54 @@
     mount.innerHTML = renderFeatureMatrix(detailsByHotel, pendingCount);
   }
 
+  function getCompareHotelPhotos (hotel, details) {
+    return mergePhotoUrls(
+      hotel?.img ? [hotel.img] : [],
+      details?.photoUrls || [],
+      8
+    );
+  }
+
+  function renderHotelPhotoCell (hotel, details, isPending) {
+    const photos = getCompareHotelPhotos(hotel, details);
+    if (!photos.length) {
+      return `
+        <div class="bpc-ct-photo-empty">
+          ${isPending ? '<span class="bpc-feature-loading" aria-hidden="true"></span>' : ''}
+          <span>${isPending ? 'Loading photos…' : 'No photos available'}</span>
+        </div>`;
+    }
+
+    const main = photos[0];
+    const thumbs = photos.slice(1, 5);
+    const moreCount = Math.max(0, photos.length - 5);
+
+    return `
+      <div class="bpc-ct-photo-gallery">
+        <a href="${esc(hotel.url)}" target="_blank" rel="noopener noreferrer" class="bpc-ct-photo-main-link">
+          <img src="${esc(main)}" alt="${esc(hotel.name)}" class="bpc-ct-photo-main">
+        </a>
+        ${thumbs.length ? `
+          <div class="bpc-ct-photo-thumbs">
+            ${thumbs.map(src => `
+              <img src="${esc(src)}" alt="" class="bpc-ct-photo-thumb">
+            `).join('')}
+            ${moreCount ? `<span class="bpc-ct-photo-more">+${moreCount}</span>` : ''}
+          </div>` : ''}
+        ${isPending ? '<div class="bpc-ct-photo-status">Loading more photos…</div>' : ''}
+      </div>`;
+  }
+
+  function updateHotelPhotoCells (modal, detailsByHotel) {
+    modal.querySelectorAll('[data-bpc-photo-cell]').forEach(cell => {
+      const idx = parseInt(cell.getAttribute('data-bpc-photo-cell') || '', 10);
+      if (!Number.isFinite(idx) || !compareList[idx]) return;
+      const details = detailsByHotel[idx];
+      const isPending = details === undefined;
+      cell.innerHTML = renderHotelPhotoCell(compareList[idx], details, isPending);
+    });
+  }
+
   // ─── Compare Modal ────────────────────────────────────────────────────────────
 
   function openCompareModal () {
@@ -1973,6 +2098,12 @@
               </tr>
             </thead>
             <tbody>
+              <tr class="bpc-ct-photo-row">
+                <td class="bpc-ct-label-col">Photos</td>
+                ${compareList.map((_, idx) => `
+                  <td class="bpc-ct-photo-cell"><div data-bpc-photo-cell="${idx}"></div></td>
+                `).join('')}
+              </tr>
               ${fields.map(f => `
                 <tr>
                   <td class="bpc-ct-label-col">${esc(f.label)}</td>
@@ -2008,12 +2139,14 @@
     // Fetch each hotel's detail page in parallel and build section-wise feature matrix
     let remaining = compareList.length;
     const detailsByHotel = Array(compareList.length).fill(undefined);
+    updateHotelPhotoCells(modal, detailsByHotel);
     updateFeatureMatrix(modal, detailsByHotel, remaining);
     compareList.forEach((h, idx) => {
       fetchHotelDetails(h.url).then(details => {
         if (!document.getElementById(COMPARE_MODAL_ID)) return; // modal was closed
         detailsByHotel[idx] = details || null;
         remaining -= 1;
+        updateHotelPhotoCells(modal, detailsByHotel);
         updateFeatureMatrix(modal, detailsByHotel, remaining);
         if (remaining === 0) modal.querySelector('.bpc-fetching-notice')?.remove();
       });
