@@ -46,6 +46,7 @@
   /** Pending fetch jobs */
   const fetchQueue  = [];
   let   activeFetches = 0;
+  const badgeCloseTransitions = new WeakMap();
 
   /**
    * The check-in date the user has selected on the calendar (first click).
@@ -589,12 +590,61 @@
     return { checkin: date, checkout: addDays(date, searchParams.nights) };
   }
 
+  /**
+   * Applies badge markup with a short loader close animation when switching
+   * from loading to a terminal state (loaded or hidden).
+   */
+  function setBadgeContent (badge, html, isLoaded) {
+    const nextHasLoader = html.includes('bpc-loading');
+    const hasLoaderNow = Boolean(badge.querySelector('.bpc-loading'));
+    const pending = badgeCloseTransitions.get(badge);
+
+    if (nextHasLoader) {
+      if (pending?.timer) {
+        clearTimeout(pending.timer);
+        badgeCloseTransitions.delete(badge);
+      }
+      badge.innerHTML = html;
+      badge.classList.remove('bpc-loaded');
+      return;
+    }
+
+    if (hasLoaderNow) {
+      if (pending) {
+        pending.html = html;
+        pending.isLoaded = Boolean(isLoaded);
+        return;
+      }
+
+      const loader = badge.querySelector('.bpc-loading');
+      if (loader) loader.classList.add('bpc-loading-exit');
+
+      const state = {
+        html,
+        isLoaded: Boolean(isLoaded),
+        timer: 0,
+      };
+      state.timer = setTimeout(() => {
+        const latest = badgeCloseTransitions.get(badge);
+        if (!latest) return;
+        badgeCloseTransitions.delete(badge);
+        badge.innerHTML = latest.html;
+        badge.classList.toggle('bpc-loaded', latest.isLoaded);
+      }, 170);
+      badgeCloseTransitions.set(badge, state);
+      return;
+    }
+
+    badge.innerHTML = html;
+    badge.classList.toggle('bpc-loaded', Boolean(isLoaded));
+  }
+
   function renderBadge (badge) {
     const date = badge.dataset.date;
-    if (!date) { badge.innerHTML = ''; return; }
+    if (!date) { setBadgeContent(badge, '', false); return; }
 
     const dates = getBadgeDates(badge);
-    if (!dates) { badge.innerHTML = ''; badge.classList.remove('bpc-loaded'); return; }
+    if (!dates) { setBadgeContent(badge, '', false); return; }
 
     const { checkin, checkout } = dates;
     const key   = cacheKey(checkin, checkout);
@@ -603,25 +653,22 @@
     if (stats === undefined) {
       // Not yet fetched – only show a loader when we're doing real fetches
       if (searchParams) {
-        badge.innerHTML = '<div class="bpc-loading"></div>';
+        setBadgeContent(badge, '<div class="bpc-loading"></div>', false);
       } else {
-        badge.innerHTML = '';
+        setBadgeContent(badge, '', false);
       }
-      badge.classList.remove('bpc-loaded');
     } else if (stats && stats.loading) {
       // Homepage fetch in progress – show the progress bar
-      badge.innerHTML = '<div class="bpc-loading"></div>';
-      badge.classList.remove('bpc-loaded');
+      setBadgeContent(badge, '<div class="bpc-loading"></div>', false);
     } else if (!stats) {
       // Fetched but no prices found → hide gracefully
-      badge.innerHTML = '';
-      badge.classList.remove('bpc-loaded');
+      setBadgeContent(badge, '', false);
     } else {
       const s = currency.symbol;
       const nights = daysBetween(checkin, checkout);
       const nightLabel = nights === 1 ? '1 night' : `${nights} nights`;
       const titleSuffix = (checkin !== date) ? ` · ${nightLabel}` : '';
-      badge.innerHTML = `
+      setBadgeContent(badge, `
         <div class="bpc-min">${s}${fmt(stats.min)}</div>
         <div class="bpc-tooltip">
           <div class="bpc-tt-title">Hotels (${stats.count} found)${titleSuffix}</div>
@@ -637,8 +684,7 @@
             <span class="bpc-tt-label">Max</span>
             <span class="bpc-tt-val">${s}${fmt(stats.max)}</span>
           </div>
-        </div>`;
-      badge.classList.add('bpc-loaded');
+        </div>`, true);
     }
   }
 
@@ -1951,13 +1997,31 @@
           .sort((a, b) => a.label.localeCompare(b.label)),
       }))
       .filter(section => section.rows.length > 0)
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => {
+        const aTop = a.name.toLowerCase() === 'top facilities';
+        const bTop = b.name.toLowerCase() === 'top facilities';
+        if (aTop && !bTop) return -1;
+        if (!aTop && bTop) return 1;
+        return a.name.localeCompare(b.name);
+      });
+  }
+
+  function normalizeCompareValue (value) {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'boolean') return value ? '1' : '0';
+    return String(value).replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  function hasCompareDifferences (values) {
+    if (!Array.isArray(values) || values.length <= 1) return false;
+    const baseline = normalizeCompareValue(values[0]);
+    return values.some(value => normalizeCompareValue(value) !== baseline);
   }
 
   function renderFeatureCell (value, rowType, isPending) {
     if (isPending) return '<span class="bpc-feature-loading" aria-label="Loading"></span>';
     if (rowType === 'boolean') {
-      if (value === true) return '<span class="bpc-feature-check" aria-label="Available">☑</span>';
+      if (value === true) return '<span class="bpc-feature-check" aria-label="Available"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="0.75" y="0.75" width="13.5" height="13.5" rx="2.75" stroke="currentColor" stroke-width="1.5"/><path d="M3 7.5L6 10.5L12 4.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
       return '<span class="bpc-feature-missing">-</span>';
     }
     if (typeof value === 'string' && value.trim()) return esc(value);
@@ -1965,86 +2029,137 @@
     return '<span class="bpc-feature-missing">-</span>';
   }
 
-  function renderFeatureMatrix (detailsByHotel, pendingCount) {
+  function renderFeatureRows (detailsByHotel, pendingCount, colSpan) {
     const sections = buildFeatureSections(detailsByHotel);
+    const rows = [];
+    const loadingNotice = pendingCount > 0
+      ? ' <span class="bpc-fetching-notice">loading…</span>'
+      : '';
+
+    rows.push(`
+      <tr class="bpc-section-divider" data-bpc-row-kind="section" data-bpc-section="features">
+        <td colspan="${colSpan}">Features${loadingNotice}</td>
+      </tr>`);
+
     if (!sections.length) {
-      if (pendingCount > 0) {
-        return '<div class="bpc-feature-empty">Loading hotel features…</div>';
-      }
-      return '<div class="bpc-feature-empty">No detailed features were found for these hotels.</div>';
+      const emptyLabel = pendingCount > 0
+        ? 'Loading hotel features…'
+        : 'No detailed features were found for these hotels.';
+      rows.push(`
+        <tr class="bpc-feature-empty-row" data-bpc-row-kind="${pendingCount > 0 ? 'feature-loading' : 'feature-empty'}" data-bpc-section="features">
+          <td colspan="${colSpan}">${emptyLabel}</td>
+        </tr>`);
+      return rows.join('');
     }
 
-    return sections.map(section => `
-      <div class="bpc-feature-section">
-        <div class="bpc-feature-section-title">${esc(section.name)}</div>
-        <table class="bpc-feature-table">
-          <tbody>
-            ${section.rows.map(row => `
-              <tr>
-                <td class="bpc-feature-key">${esc(row.label)}</td>
-                ${compareList.map((_, idx) => `
-                  <td class="bpc-feature-value">${renderFeatureCell(
-                    row.values[idx],
-                    row.type,
-                    row.values[idx] === undefined && detailsByHotel[idx] === undefined
-                  )}</td>`).join('')}
-              </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>`).join('');
+    rows.push(`
+      <tr class="bpc-feature-empty-row" data-bpc-row-kind="feature-empty-diff" data-bpc-section="features" hidden>
+        <td colspan="${colSpan}">No differences found in hotel features.</td>
+      </tr>`);
+
+    sections.forEach(section => {
+      rows.push(`
+        <tr class="bpc-subsection-divider" data-bpc-row-kind="subsection" data-bpc-section="features">
+          <td colspan="${colSpan}">${esc(section.name)}</td>
+        </tr>`);
+
+      section.rows.forEach(row => {
+        const differs = hasCompareDifferences(row.values);
+        rows.push(`
+          <tr data-bpc-row-kind="feature-field" data-bpc-section="features" data-bpc-diff="${differs ? '1' : '0'}">
+            <td class="bpc-ct-label-col bpc-ct-sub-label">${esc(row.label)}</td>
+            ${compareList.map((_, idx) => `
+              <td>${renderFeatureCell(
+                row.values[idx],
+                row.type,
+                row.values[idx] === undefined && detailsByHotel[idx] === undefined
+              )}</td>`).join('')}
+          </tr>`);
+      });
+    });
+
+    return rows.join('');
   }
 
-  function updateFeatureMatrix (modal, detailsByHotel, pendingCount) {
-    const mount = modal.querySelector('[data-bpc-feature-matrix]');
+  function updateFeatureRows (modal, detailsByHotel, pendingCount) {
+    const mount = modal.querySelector('[data-bpc-feature-tbody]');
     if (!mount) return;
-    mount.innerHTML = renderFeatureMatrix(detailsByHotel, pendingCount);
+    mount.innerHTML = renderFeatureRows(detailsByHotel, pendingCount, compareList.length + 1);
   }
 
-  function getCompareHotelPhotos (hotel, details) {
-    return mergePhotoUrls(
-      hotel?.img ? [hotel.img] : [],
-      details?.photoUrls || [],
-      8
-    );
-  }
+  function applyCompareFilters (modal) {
+    const activeTab = modal.getAttribute('data-bpc-active-tab') || 'all';
+    const differencesOnly = modal.getAttribute('data-bpc-diff-only') === '1';
+    const visibleRowsBySection = new Map();
+    const rows = Array.from(modal.querySelectorAll('[data-bpc-row-kind]'));
 
-  function renderHotelPhotoCell (hotel, details, isPending) {
-    const photos = getCompareHotelPhotos(hotel, details);
-    if (!photos.length) {
-      return `
-        <div class="bpc-ct-photo-empty">
-          ${isPending ? '<span class="bpc-feature-loading" aria-hidden="true"></span>' : ''}
-          <span>${isPending ? 'Loading photos…' : 'No photos available'}</span>
-        </div>`;
+    rows.forEach(row => {
+      const kind = row.getAttribute('data-bpc-row-kind');
+      if (kind === 'section' || kind === 'subsection' || kind === 'feature-empty-diff') return;
+
+      const section = row.getAttribute('data-bpc-section') || 'general';
+      let visible = activeTab === 'all' || activeTab === section;
+
+      if (visible && differencesOnly && (kind === 'field' || kind === 'feature-field')) {
+        visible = row.getAttribute('data-bpc-diff') === '1';
+      }
+
+      row.hidden = !visible;
+      if (visible) {
+        visibleRowsBySection.set(section, (visibleRowsBySection.get(section) || 0) + 1);
+      }
+    });
+
+    const featureDiffEmpty = modal.querySelector('[data-bpc-row-kind="feature-empty-diff"]');
+    if (featureDiffEmpty) {
+      const featureTabVisible = activeTab === 'all' || activeTab === 'features';
+      const hasFeatureRows = rows.some(row => row.getAttribute('data-bpc-row-kind') === 'feature-field');
+      const visibleFeatureRows = rows.some(row =>
+        row.getAttribute('data-bpc-row-kind') === 'feature-field' && !row.hidden
+      );
+      const showDiffEmpty = featureTabVisible && differencesOnly && hasFeatureRows && !visibleFeatureRows;
+      featureDiffEmpty.hidden = !showDiffEmpty;
+      if (showDiffEmpty) {
+        visibleRowsBySection.set('features', (visibleRowsBySection.get('features') || 0) + 1);
+      }
     }
 
-    const main = photos[0];
-    const thumbs = photos.slice(1, 5);
-    const moreCount = Math.max(0, photos.length - 5);
+    rows.forEach(row => {
+      if (row.getAttribute('data-bpc-row-kind') !== 'subsection') return;
+      const section = row.getAttribute('data-bpc-section') || 'general';
+      const isTabVisible = activeTab === 'all' || activeTab === section;
+      if (!isTabVisible) {
+        row.hidden = true;
+        return;
+      }
 
-    return `
-      <div class="bpc-ct-photo-gallery">
-        <a href="${esc(hotel.url)}" target="_blank" rel="noopener noreferrer" class="bpc-ct-photo-main-link">
-          <img src="${esc(main)}" alt="${esc(hotel.name)}" class="bpc-ct-photo-main">
-        </a>
-        ${thumbs.length ? `
-          <div class="bpc-ct-photo-thumbs">
-            ${thumbs.map(src => `
-              <img src="${esc(src)}" alt="" class="bpc-ct-photo-thumb">
-            `).join('')}
-            ${moreCount ? `<span class="bpc-ct-photo-more">+${moreCount}</span>` : ''}
-          </div>` : ''}
-        ${isPending ? '<div class="bpc-ct-photo-status">Loading more photos…</div>' : ''}
-      </div>`;
-  }
+      let hasVisibleRows = false;
+      let next = row.nextElementSibling;
+      while (next && next.hasAttribute('data-bpc-row-kind')) {
+        const nextKind = next.getAttribute('data-bpc-row-kind');
+        if (nextKind === 'subsection' || nextKind === 'section') break;
+        if (!next.hidden) {
+          hasVisibleRows = true;
+          break;
+        }
+        next = next.nextElementSibling;
+      }
+      row.hidden = !hasVisibleRows;
+    });
 
-  function updateHotelPhotoCells (modal, detailsByHotel) {
-    modal.querySelectorAll('[data-bpc-photo-cell]').forEach(cell => {
-      const idx = parseInt(cell.getAttribute('data-bpc-photo-cell') || '', 10);
-      if (!Number.isFinite(idx) || !compareList[idx]) return;
-      const details = detailsByHotel[idx];
-      const isPending = details === undefined;
-      cell.innerHTML = renderHotelPhotoCell(compareList[idx], details, isPending);
+    rows.forEach(row => {
+      if (row.getAttribute('data-bpc-row-kind') !== 'section') return;
+      const section = row.getAttribute('data-bpc-section') || 'general';
+      const isTabVisible = activeTab === 'all' || activeTab === section;
+      const hasVisibleRows = (visibleRowsBySection.get(section) || 0) > 0;
+      row.hidden = !(isTabVisible && hasVisibleRows);
+    });
+
+    const tabButtons = modal.querySelectorAll('[data-bpc-tab]');
+    tabButtons.forEach(btn => {
+      const tab = btn.getAttribute('data-bpc-tab');
+      btn.classList.toggle('is-active', tab === activeTab);
+      btn.setAttribute('aria-selected', tab === activeTab ? 'true' : 'false');
     });
   }
 
@@ -2058,32 +2173,151 @@
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-modal', 'true');
     modal.setAttribute('aria-label', 'Hotel comparison');
+    modal.setAttribute('data-bpc-active-tab', 'all');
+    modal.setAttribute('data-bpc-diff-only', '0');
 
-    const fields = [
-      { label: 'Stars',    render: h => h.stars
-          ? '★'.repeat(h.stars) + '<span class="bpc-star-empty">★</span>'.repeat(Math.max(0, 5 - h.stars))
-          : '-' },
-      { label: 'Score',    render: h => h.score
-          ? `<strong class="bpc-modal-score">${esc(h.score)}</strong> <span class="bpc-score-lbl">${esc(h.scoreLabel)}</span><br><small>${esc(h.reviewCount)}</small>`
-          : '-' },
-      { label: 'Location', render: h => esc(h.location) || '-' },
-      { label: 'Distance', render: h => esc(h.distance) || '-' },
-      { label: 'Room',     render: h => esc(h.room)     || '-' },
-      { label: 'Price',    render: h => h.price
-          ? `<strong class="bpc-modal-price">${esc(h.price)}</strong>` : '-' },
-      { label: 'Was',      render: h => h.origPrice ? `<s>${esc(h.origPrice)}</s>` : '-' },
-      { label: 'Duration', render: h => esc(h.nights)   || '-' },
-      { label: 'Payment',  render: h => esc(h.payment)  || '-' },
+    const tabs = [
+      { id: 'all',      label: 'All information' },
+      { id: 'general',  label: 'General information' },
+      { id: 'pricing',  label: 'Pricing' },
+      { id: 'ratings',  label: 'Ratings' },
+      { id: 'stay',     label: 'Stay details' },
+      { id: 'features', label: 'Features' },
     ];
+
+    const sections = [
+      {
+        id: 'general',
+        title: 'General Information',
+        rows: [
+          {
+            label: 'Stars',
+            valueOf: h => h.stars || '',
+            render: h => h.stars
+              ? '★'.repeat(h.stars) + '<span class="bpc-star-empty">★</span>'.repeat(Math.max(0, 5 - h.stars))
+              : '-',
+          },
+          {
+            label: 'Location',
+            valueOf: h => h.location || '',
+            render: h => esc(h.location) || '-',
+          },
+          {
+            label: 'Distance',
+            valueOf: h => h.distance || '',
+            render: h => esc(h.distance) || '-',
+          },
+        ],
+      },
+      {
+        id: 'ratings',
+        title: 'Ratings',
+        rows: [
+          {
+            label: 'Guest score',
+            valueOf: h => [h.score || '', h.scoreLabel || ''].join('|'),
+            render: h => h.score
+              ? `<strong class="bpc-modal-score">${esc(h.score)}</strong> <span class="bpc-score-lbl">${esc(h.scoreLabel)}</span>`
+              : '-',
+          },
+          {
+            label: 'Reviews',
+            valueOf: h => h.reviewCount || '',
+            render: h => esc(h.reviewCount) || '-',
+          },
+        ],
+      },
+      {
+        id: 'pricing',
+        title: 'Pricing',
+        rows: [
+          {
+            label: 'Price',
+            valueOf: h => h.price || '',
+            render: h => h.price ? `<strong class="bpc-modal-price">${esc(h.price)}</strong>` : '-',
+          },
+          {
+            label: 'Previous price',
+            valueOf: h => h.origPrice || '',
+            render: h => h.origPrice ? `<s>${esc(h.origPrice)}</s>` : '-',
+          },
+          {
+            label: 'Duration',
+            valueOf: h => h.nights || '',
+            render: h => esc(h.nights) || '-',
+          },
+        ],
+      },
+      {
+        id: 'stay',
+        title: 'Stay Details',
+        rows: [
+          {
+            label: 'Room',
+            valueOf: h => h.room || '',
+            render: h => esc(h.room) || '-',
+          },
+          {
+            label: 'Payment',
+            valueOf: h => h.payment || '',
+            render: h => esc(h.payment) || '-',
+          },
+        ],
+      },
+    ];
+
+    const renderSectionRows = section => {
+      const rows = section.rows.map(row => {
+        const rowValues = compareList.map(h => row.valueOf(h));
+        const differs = hasCompareDifferences(rowValues);
+        return `
+          <tr data-bpc-row-kind="field" data-bpc-section="${section.id}" data-bpc-diff="${differs ? '1' : '0'}">
+            <td class="bpc-ct-label-col">${esc(row.label)}</td>
+            ${compareList.map(h => `<td>${row.render(h)}</td>`).join('')}
+          </tr>`;
+      }).join('');
+
+      return `
+        <tr class="bpc-section-divider" data-bpc-row-kind="section" data-bpc-section="${section.id}">
+          <td colspan="${compareList.length + 1}">${esc(section.title)}</td>
+        </tr>
+        ${rows}`;
+    };
 
     modal.innerHTML = `
       <div class="bpc-modal-backdrop"></div>
       <div class="bpc-modal-dialog">
         <div class="bpc-modal-header">
-          <h2 class="bpc-modal-title">Compare Hotels</h2>
-          <button class="bpc-modal-close" aria-label="Close comparison">×</button>
+          <div class="bpc-modal-header-main">
+            <h2 class="bpc-modal-title">Compare Hotels</h2>
+            <div class="bpc-modal-subtitle">${compareList.length} hotels selected</div>
+          </div>
+          <div class="bpc-modal-header-actions">
+            <label class="bpc-modal-diff-toggle">
+              <input type="checkbox" data-bpc-diff-toggle>
+              <span class="bpc-modal-diff-icon" aria-hidden="true"></span>
+              <span class="bpc-modal-diff-text">Only differences</span>
+            </label>
+            <button class="bpc-modal-reset" type="button">Reset all</button>
+            <button class="bpc-modal-close" aria-label="Close comparison">×</button>
+          </div>
+        </div>
+        <div class="bpc-modal-tabs" role="tablist" aria-label="Comparison sections">
+          ${tabs.map((tab, idx) => `
+            <button
+              type="button"
+              class="bpc-modal-tab${idx === 0 ? ' is-active' : ''}"
+              role="tab"
+              aria-selected="${idx === 0 ? 'true' : 'false'}"
+              data-bpc-tab="${tab.id}">
+              ${esc(tab.label)}
+            </button>`).join('')}
         </div>
         <div class="bpc-modal-body">
+          <div class="bpc-modal-loader" data-bpc-modal-loader>
+            <span class="bpc-loading" aria-hidden="true"></span>
+            <span class="bpc-modal-loader-text">Loading comparison…</span>
+          </div>
           <table class="bpc-compare-table">
             <thead>
               <tr>
@@ -2094,62 +2328,100 @@
                       ${h.img ? `<img src="${esc(h.img)}" alt="" class="bpc-ct-hotel-img">` : ''}
                       <span class="bpc-ct-hotel-name">${esc(h.name)}</span>
                     </a>
+                    <button class="bpc-ct-remove-col" type="button" data-bpc-remove-id="${esc(h.id)}">Remove</button>
                   </th>`).join('')}
               </tr>
             </thead>
             <tbody>
-              <tr class="bpc-ct-photo-row">
-                <td class="bpc-ct-label-col">Photos</td>
-                ${compareList.map((_, idx) => `
-                  <td class="bpc-ct-photo-cell"><div data-bpc-photo-cell="${idx}"></div></td>
-                `).join('')}
-              </tr>
-              ${fields.map(f => `
-                <tr>
-                  <td class="bpc-ct-label-col">${esc(f.label)}</td>
-                  ${compareList.map(h => `<td>${f.render(h)}</td>`).join('')}
-                </tr>`).join('')}
-              <tr class="bpc-section-divider">
-                <td colspan="${compareList.length + 1}">
-                  Feature Comparison <span class="bpc-fetching-notice">loading…</span>
-                </td>
-              </tr>
-              <tr>
-                <td colspan="${compareList.length + 1}" class="bpc-feature-matrix-cell">
-                  <div class="bpc-feature-matrix" data-bpc-feature-matrix>
-                    <div class="bpc-feature-empty">Loading hotel features…</div>
-                  </div>
-                </td>
-              </tr>
+              ${sections.map(renderSectionRows).join('')}
             </tbody>
+            <tbody data-bpc-feature-tbody></tbody>
           </table>
         </div>
       </div>`;
 
+    const closeModal = () => {
+      modal.remove();
+      document.removeEventListener('keydown', onEsc);
+      document.body.style.overflow = '';
+    };
+
     modal.querySelector('.bpc-modal-backdrop')
-      .addEventListener('click', () => modal.remove());
+      .addEventListener('click', closeModal);
     modal.querySelector('.bpc-modal-close')
-      .addEventListener('click', () => modal.remove());
-    document.addEventListener('keydown', function onEsc (e) {
-      if (e.key === 'Escape') { modal.remove(); document.removeEventListener('keydown', onEsc); }
-    });
+      .addEventListener('click', closeModal);
+    const onEsc = e => {
+      if (e.key === 'Escape') closeModal();
+    };
+    document.addEventListener('keydown', onEsc);
 
     document.body.appendChild(modal);
+    document.body.style.overflow = 'hidden';
+    applyCompareFilters(modal);
+
+    modal.querySelectorAll('[data-bpc-tab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        modal.setAttribute('data-bpc-active-tab', btn.getAttribute('data-bpc-tab') || 'all');
+        applyCompareFilters(modal);
+      });
+    });
+
+    modal.querySelector('[data-bpc-diff-toggle]')?.addEventListener('change', e => {
+      modal.setAttribute('data-bpc-diff-only', e.target.checked ? '1' : '0');
+      applyCompareFilters(modal);
+    });
+
+    modal.querySelector('.bpc-modal-reset')?.addEventListener('click', () => {
+      compareList = [];
+      saveCompareList();
+      renderCompareBar();
+      updateAllCompareButtons();
+      closeModal();
+    });
+
+    modal.querySelectorAll('[data-bpc-remove-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-bpc-remove-id') || '';
+        compareList = compareList.filter(h => h.id !== id);
+        saveCompareList();
+        renderCompareBar();
+        updateAllCompareButtons();
+        closeModal();
+        if (compareList.length >= 2) openCompareModal();
+      });
+    });
+
+    function closeCompareLoader () {
+      const loader = modal.querySelector('[data-bpc-modal-loader]');
+      if (!loader || loader.classList.contains('is-closing')) return;
+      loader.classList.add('is-closing');
+      setTimeout(() => loader.remove(), 220);
+    }
 
     // Fetch each hotel's detail page in parallel and build section-wise feature matrix
     let remaining = compareList.length;
     const detailsByHotel = Array(compareList.length).fill(undefined);
-    updateHotelPhotoCells(modal, detailsByHotel);
-    updateFeatureMatrix(modal, detailsByHotel, remaining);
+    updateFeatureRows(modal, detailsByHotel, remaining);
+    applyCompareFilters(modal);
+    if (remaining === 0) {
+      closeCompareLoader();
+    }
+
+    const settleHotelDetails = (idx, details) => {
+      if (!document.getElementById(COMPARE_MODAL_ID)) return; // modal was closed
+      detailsByHotel[idx] = details || null;
+      remaining = Math.max(0, remaining - 1);
+      updateFeatureRows(modal, detailsByHotel, remaining);
+      applyCompareFilters(modal);
+      if (remaining === 0) {
+        closeCompareLoader();
+      }
+    };
+
     compareList.forEach((h, idx) => {
-      fetchHotelDetails(h.url).then(details => {
-        if (!document.getElementById(COMPARE_MODAL_ID)) return; // modal was closed
-        detailsByHotel[idx] = details || null;
-        remaining -= 1;
-        updateHotelPhotoCells(modal, detailsByHotel);
-        updateFeatureMatrix(modal, detailsByHotel, remaining);
-        if (remaining === 0) modal.querySelector('.bpc-fetching-notice')?.remove();
-      });
+      fetchHotelDetails(h.url)
+        .then(details => settleHotelDetails(idx, details))
+        .catch(() => settleHotelDetails(idx, null));
     });
   }
 
