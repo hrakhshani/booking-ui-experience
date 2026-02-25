@@ -168,6 +168,483 @@
 .bpc-price-badge.bpc-yellow .bpc-tt-val { color: #a16207; }
 .bpc-price-badge.bpc-orange .bpc-tt-val { color: #c2410c; }
 
+/* ============================================================
+   Hotel Comparison Feature
+   ============================================================ */
+
+/* ── Compare "+" button on each hotel card ───────────────── */
+.bpc-compare-btn {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1.5px solid #d0d0d0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 300;
+  line-height: 1;
+  color: #003580;
+  z-index: 10;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.1s;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.bpc-compare-btn:hover {
+  background: #003580;
+  color: #fff;
+  border-color: #003580;
+  transform: scale(1.08);
+}
+
+.bpc-compare-btn--active {
+  background: #003580;
+  color: #fff;
+  border-color: #003580;
+  font-size: 16px;
+}
+
+.bpc-compare-btn--active:hover {
+  background: #c0392b;
+  border-color: #c0392b;
+}
+
+/* ── Compare bar (sticky bottom tray) ────────────────────── */
+#bpc-compare-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 99998;
+  background: #fff;
+  border-top: 1px solid #d8d8d8;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.12);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.bpc-cb-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.bpc-cb-slots {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.bpc-cb-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f5f7fa;
+  border: 1px solid #e0e4eb;
+  border-radius: 8px;
+  padding: 6px 8px 6px 6px;
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+.bpc-cb-slot--empty {
+  border-style: dashed;
+  color: #999;
+  font-size: 12px;
+  justify-content: center;
+  background: transparent;
+}
+
+.bpc-cb-slot-img,
+.bpc-cb-no-img {
+  width: 48px;
+  height: 48px;
+  border-radius: 5px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #dde2ea;
+}
+
+.bpc-cb-slot-info {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.bpc-cb-slot-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a1a2e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bpc-cb-slot-price {
+  font-size: 12px;
+  color: #003580;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.bpc-cb-remove {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #999;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  transition: color 0.15s;
+}
+
+.bpc-cb-remove:hover { color: #c0392b; }
+
+.bpc-cb-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.bpc-cb-btn-compare {
+  background: #003580;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 9px 20px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.bpc-cb-btn-compare:hover:not(:disabled) { background: #00224f; }
+
+.bpc-cb-btn-compare:disabled {
+  background: #b0b8c9;
+  cursor: not-allowed;
+}
+
+.bpc-cb-btn-clear {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: center;
+  text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.bpc-cb-btn-clear:hover { color: #c0392b; }
+
+/* ── Compare modal ───────────────────────────────────────── */
+#bpc-compare-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.bpc-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.52);
+}
+
+.bpc-modal-dialog {
+  position: relative;
+  background: #fff;
+  border-radius: 12px;
+  max-width: min(92vw, 960px);
+  max-height: 88vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.28);
+  min-width: 400px;
+}
+
+.bpc-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #eee;
+  flex-shrink: 0;
+}
+
+.bpc-modal-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.bpc-modal-close {
+  background: none;
+  border: none;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  color: #666;
+  padding: 0 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.bpc-modal-close:hover { color: #1a1a2e; background: #f0f0f0; }
+
+.bpc-modal-body {
+  overflow: auto;
+  padding: 16px 20px 20px;
+  flex: 1;
+}
+
+/* ── Comparison table ────────────────────────────────────── */
+.bpc-compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.bpc-compare-table th,
+.bpc-compare-table td {
+  padding: 10px 14px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.bpc-compare-table thead th {
+  padding-bottom: 14px;
+  border-bottom: 2px solid #e0e4eb;
+  vertical-align: bottom;
+}
+
+.bpc-ct-label-col {
+  font-size: 11px;
+  font-weight: 700;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  width: 80px;
+}
+
+.bpc-ct-hotel-link {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  color: #003580;
+  font-weight: 600;
+  font-size: 13px;
+  text-align: center;
+}
+
+.bpc-ct-hotel-link:hover { color: #00224f; text-decoration: underline; }
+
+.bpc-ct-hotel-img {
+  width: 100px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 6px;
+  display: block;
+}
+
+.bpc-ct-hotel-name {
+  max-width: 160px;
+  display: block;
+}
+
+.bpc-compare-table tbody tr:hover td {
+  background: #f8fafc;
+}
+
+.bpc-modal-score {
+  font-size: 16px;
+  color: #003580;
+}
+
+.bpc-score-lbl {
+  color: #555;
+  font-size: 12px;
+}
+
+.bpc-modal-price {
+  font-size: 15px;
+  color: #003580;
+}
+
+.bpc-star-empty {
+  opacity: 0.2;
+}
+
+/* ── More-details section divider row ────────────────────── */
+.bpc-section-divider td {
+  background: #f5f7fa;
+  font-size: 11px;
+  font-weight: 700;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 10px 14px;
+  border-top: 2px solid #e0e4eb;
+  border-bottom: 1px solid #e0e4eb;
+}
+
+.bpc-fetching-notice {
+  font-weight: 400;
+  font-style: italic;
+  color: #aaa;
+  margin-left: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ── Facility tags ───────────────────────────────────────── */
+.bpc-facility-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.bpc-facility-tag {
+  display: inline-block;
+  background: #eef2ff;
+  color: #3b5bdb;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+/* ── Facility groups (detailed breakdown) ───────────────── */
+.bpc-facility-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bpc-fg-group {
+  border-bottom: 1px solid #f0f0f0;
+  padding-bottom: 6px;
+}
+
+.bpc-fg-group:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.bpc-fg-name {
+  font-size: 10px;
+  font-weight: 700;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.bpc-fg-desc {
+  font-size: 12px;
+  color: #444;
+  margin-bottom: 2px;
+}
+
+.bpc-fg-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+/* ── POI (area info) lists ───────────────────────────────── */
+.bpc-poi-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.bpc-poi-item {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 0;
+  font-size: 12px;
+  border-bottom: 1px solid #f5f5f5;
+}
+
+.bpc-poi-item:last-child {
+  border-bottom: none;
+}
+
+.bpc-poi-type {
+  font-size: 10px;
+  color: #777;
+  background: #f0f0f0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bpc-poi-name {
+  color: #222;
+  flex: 1;
+  min-width: 0;
+}
+
+.bpc-poi-dist {
+  font-size: 11px;
+  color: #003580;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Toast notification ──────────────────────────────────── */
+.bpc-toast {
+  position: fixed;
+  bottom: 120px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 99999;
+  background: #1a1a2e;
+  color: #fff;
+  font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  padding: 10px 18px;
+  border-radius: 20px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
+  animation: bpc-fadein 0.2s ease;
+  white-space: nowrap;
+}
+
+@keyframes bpc-fadein {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 /* ── Ensure the tooltip does not get clipped on edge cells ── */
 /* Left-edge cells: push tooltip to the right */
 td:first-child .bpc-price-badge .bpc-tooltip,

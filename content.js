@@ -14,9 +14,10 @@
 
   const BADGE_CLASS    = 'bpc-price-badge';
   const INJECTED_ATTR  = 'data-bpc-done';
-  const FETCH_DELAY_MS = 900;   // gap between background price-fetches (ms)
-  const MAX_CONCURRENT = 2;     // parallel fetch slots
-  const SCRAPE_DELAY_MS = 2000; // wait for dynamic content before first scrape
+  const FETCH_DELAY_MS      = 900;   // gap between background price-fetches (ms)
+  const MAX_CONCURRENT      = 2;     // parallel fetch slots
+  const SCRAPE_DELAY_MS     = 3000;  // wait for dynamic content before first scrape
+  const DETAIL_LOAD_DELAY_MS = 1500; // pause before retrying hotel detail fetch
 
   // ─── Runtime state ──────────────────────────────────────────────────────────
 
@@ -70,6 +71,9 @@
 
     // Handle soft (SPA) navigations
     watchNavigation();
+
+    // Inject compare buttons on search-result hotel cards
+    watchForHotelCards();
 
     console.debug('[BPC] Initialized', searchParams);
   }
@@ -438,8 +442,9 @@
         }
       }
     } else {
-      // Second click on a later date → user picked checkout; reset
+      // Second click on a later date → user picked checkout; reset and close picker
       selectedCheckin = null;
+      closeDatePicker();
     }
     updateAllBadges();
   }
@@ -856,6 +861,37 @@
     }).observe(document, { subtree: true, childList: true });
   }
 
+  // ─── Date-picker close ───────────────────────────────────────────────────────
+
+  /**
+   * Close the date-picker after the checkout date is selected.
+   * Uses a short delay so Booking.com can finish processing the date selection
+   * before we attempt to close. Avoids Escape key which resets the selection.
+   */
+  function closeDatePicker () {
+    setTimeout(() => {
+      // 1. Dedicated close / done button
+      const closeBtn = document.querySelector(
+        '[data-testid="datepicker-close"], ' +
+        '[data-testid="searchbox-dates-close"], ' +
+        '[aria-label="Close calendar"], ' +
+        '[class*="datepicker__close"], ' +
+        '[class*="DatePicker__close"]'
+      );
+      if (closeBtn) { closeBtn.click(); return; }
+
+      // 2. Click outside the calendar (on the backdrop / body) to dismiss
+      const cal = document.querySelector(CALENDAR_SELECTOR);
+      if (cal) {
+        const rect = cal.getBoundingClientRect();
+        // Click a point well outside the calendar bounds
+        const x = rect.right + 40;
+        const y = rect.top  + (rect.height / 2);
+        document.elementFromPoint(x, y)?.click();
+      }
+    }, 150);
+  }
+
   // ─── Utilities ───────────────────────────────────────────────────────────────
 
   function cacheKey (checkin, checkout) {
@@ -883,6 +919,1021 @@
   }
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // ─── Hotel Comparison ────────────────────────────────────────────────────────
+
+  const COMPARE_BTN_CLASS = 'bpc-compare-btn';
+  const COMPARE_BAR_ID    = 'bpc-compare-bar';
+  const COMPARE_MODAL_ID  = 'bpc-compare-modal';
+  const MAX_COMPARE       = 4;
+
+  /** Cache for hotel detail page fetches (facilities + area info) keyed by URL */
+  const detailsCache = new Map();
+
+  /** Currently saved hotels for comparison */
+  let compareList = [];
+
+  // Persist compare list across page loads (local storage, not synced)
+  chrome.storage.local.get({ compareList: [] }, s => {
+    compareList = s.compareList || [];
+    renderCompareBar();
+    updateAllCompareButtons();
+  });
+
+  function saveCompareList () {
+    chrome.storage.local.set({ compareList }).catch(err => {
+      console.warn('[BPC] Failed to save compare list:', err);
+    });
+  }
+
+  /** Return a stable hotel ID from its page URL path */
+  function getHotelId (card) {
+    const link = card.querySelector('[data-testid="title-link"]');
+    if (!link?.href) return null;
+    try { return new URL(link.href).pathname.split('?')[0]; } catch (_) { return null; }
+  }
+
+  /** Scrape the visible data from a property card element */
+  function extractHotelData (card) {
+    const name = card.querySelector('[data-testid="title"]')?.textContent.trim() || '';
+    const url  = card.querySelector('[data-testid="title-link"]')?.href || '';
+    const img  = card.querySelector(
+      '[data-testid="property-card-desktop-single-image"] img, [data-testid="image"]'
+    )?.src || '';
+
+    // Stars: aria-label="4 out of 5"
+    const starsMatch = card.querySelector('[aria-label*="out of 5"]')
+      ?.getAttribute('aria-label')?.match(/^(\d)/);
+    const stars = starsMatch ? parseInt(starsMatch[1]) : 0;
+
+    // Review score
+    const scoreEl    = card.querySelector('[data-testid="review-score"]');
+    const score      = scoreEl?.querySelector('[aria-hidden="true"]')?.textContent.trim() || '';
+    const scoreLabel = scoreEl?.querySelector('[aria-hidden="false"] div:first-child')?.textContent.trim() || '';
+    const reviewCount= scoreEl?.querySelector('[aria-hidden="false"] div:last-child')?.textContent.trim()  || '';
+
+    // Location & distance
+    const location = card.querySelector('[data-testid="address-link"] .d823fbbeed')
+      ?.textContent.trim() || '';
+    const distance = card.querySelector('[data-testid="distance"]')?.textContent.trim() || '';
+
+    // Prices
+    const price     = card.querySelector('[data-testid="price-and-discounted-price"]')?.textContent.trim() || '';
+    const origPrice = card.querySelector('.d68334ea31')?.textContent.trim() || '';
+    const nights    = card.querySelector('[data-testid="price-for-x-nights"]')?.textContent.trim() || '';
+
+    // Room & payment
+    const room    = card.querySelector('[data-testid="recommended-units"] h4')?.textContent.trim() || '';
+    const payment = card.querySelector('[data-testid="availability-single"] strong')?.textContent.trim() || '';
+
+    return { name, url, img, stars, score, scoreLabel, reviewCount,
+             location, distance, price, origPrice, nights, room, payment };
+  }
+
+  /** Toggle a hotel in/out of the compare list */
+  function toggleCompare (card) {
+    const id  = getHotelId(card);
+    if (!id) return;
+
+    const idx = compareList.findIndex(h => h.id === id);
+    if (idx >= 0) {
+      compareList.splice(idx, 1);
+    } else {
+      if (compareList.length >= MAX_COMPARE) {
+        showCompareToast(`You can compare up to ${MAX_COMPARE} hotels at once`);
+        return;
+      }
+      compareList.push({ id, ...extractHotelData(card) });
+    }
+
+    saveCompareList();
+    renderCompareBar();
+    updateAllCompareButtons();
+  }
+
+  /** Inject the "+" button into a property card (no-op if already injected) */
+  function injectCompareButton (card) {
+    if (card.querySelector(`.${COMPARE_BTN_CLASS}`)) return;
+
+    const id     = getHotelId(card);
+    const active = id ? compareList.some(h => h.id === id) : false;
+
+    const btn = document.createElement('button');
+    btn.className = COMPARE_BTN_CLASS + (active ? ' bpc-compare-btn--active' : '');
+    btn.type      = 'button';
+    btn.title     = active ? 'Remove from comparison' : 'Compare this hotel';
+    btn.setAttribute('aria-label', active ? 'Remove from comparison' : 'Add to comparison');
+    btn.textContent = active ? '✓' : '+';
+
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleCompare(card);
+    });
+
+    const imgContainer = card.querySelector('.c17271c4d7');
+    if (imgContainer) {
+      imgContainer.style.position = 'relative';
+      imgContainer.appendChild(btn);
+    } else {
+      card.style.position = 'relative';
+      card.appendChild(btn);
+    }
+  }
+
+  /** Refresh the compare button state on a single card */
+  function updateCompareButton (card) {
+    const btn    = card.querySelector(`.${COMPARE_BTN_CLASS}`);
+    const id     = getHotelId(card);
+    const active = id ? compareList.some(h => h.id === id) : false;
+
+    if (!btn) { injectCompareButton(card); return; }
+
+    btn.className   = COMPARE_BTN_CLASS + (active ? ' bpc-compare-btn--active' : '');
+    btn.title       = active ? 'Remove from comparison' : 'Compare this hotel';
+    btn.textContent = active ? '✓' : '+';
+    btn.setAttribute('aria-label', active ? 'Remove from comparison' : 'Add to comparison');
+  }
+
+  function updateAllCompareButtons () {
+    document.querySelectorAll('[data-testid="property-card"]').forEach(updateCompareButton);
+  }
+
+  /** Inject compare buttons now and watch for new cards added by infinite scroll */
+  function watchForHotelCards () {
+    document.querySelectorAll('[data-testid="property-card"]').forEach(injectCompareButton);
+
+    new MutationObserver(mutations => {
+      for (const { addedNodes } of mutations) {
+        for (const node of addedNodes) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          if (node.matches('[data-testid="property-card"]')) injectCompareButton(node);
+          node.querySelectorAll('[data-testid="property-card"]').forEach(injectCompareButton);
+        }
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+
+  // ─── Compare Bar (sticky bottom tray) ────────────────────────────────────────
+
+  function renderCompareBar () {
+    let bar = document.getElementById(COMPARE_BAR_ID);
+
+    if (compareList.length === 0) { bar?.remove(); return; }
+
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = COMPARE_BAR_ID;
+      document.body.appendChild(bar);
+    }
+
+    const emptySlots = MAX_COMPARE - compareList.length;
+
+    bar.innerHTML = `
+      <div class="bpc-cb-inner">
+        <div class="bpc-cb-slots">
+          ${compareList.map(h => `
+            <div class="bpc-cb-slot">
+              ${h.img
+                ? `<img src="${esc(h.img)}" alt="" class="bpc-cb-slot-img">`
+                : '<div class="bpc-cb-slot-img bpc-cb-no-img"></div>'}
+              <div class="bpc-cb-slot-info">
+                <div class="bpc-cb-slot-name">${esc(h.name)}</div>
+                <div class="bpc-cb-slot-price">${esc(h.price)}</div>
+              </div>
+              <button class="bpc-cb-remove" data-id="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">×</button>
+            </div>
+          `).join('')}
+          ${Array.from({ length: emptySlots }, () => `
+            <div class="bpc-cb-slot bpc-cb-slot--empty">
+              <span>+ Add hotel</span>
+            </div>
+          `).join('')}
+        </div>
+        <div class="bpc-cb-actions">
+          <button class="bpc-cb-btn-compare" ${compareList.length < 2 ? 'disabled' : ''}>
+            Compare (${compareList.length})
+          </button>
+          <button class="bpc-cb-btn-clear">Clear all</button>
+        </div>
+      </div>`;
+
+    bar.querySelectorAll('.bpc-cb-remove').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        compareList = compareList.filter(h => h.id !== btn.dataset.id);
+        saveCompareList();
+        renderCompareBar();
+        updateAllCompareButtons();
+      });
+    });
+
+    bar.querySelector('.bpc-cb-btn-compare')?.addEventListener('click', () => {
+      if (compareList.length >= 2) openCompareModal();
+    });
+
+    bar.querySelector('.bpc-cb-btn-clear')?.addEventListener('click', () => {
+      compareList = [];
+      saveCompareList();
+      renderCompareBar();
+      updateAllCompareButtons();
+    });
+  }
+
+  // ─── Hotel detail fetching ────────────────────────────────────────────────────
+
+  /**
+   * Load a hotel page in a hidden same-origin iframe, scroll through it to fire
+   * lazy-load observers, then extract detail blocks from the live DOM.
+   */
+  function fetchHotelDetailsViaIframe (url) {
+    return new Promise((resolve) => {
+      const iframe = document.createElement('iframe');
+
+      // Position off-screen but give real dimensions so IntersectionObserver
+      // inside the iframe fires normally (it uses the iframe's own viewport).
+      Object.assign(iframe.style, {
+        position:      'fixed',
+        top:           '-10000px',
+        left:          '-10000px',
+        width:         '1280px',
+        height:        '900px',
+        border:        'none',
+        pointerEvents: 'none',
+        zIndex:        '-1',
+      });
+      iframe.setAttribute('aria-hidden', 'true');
+      iframe.src = url;
+
+      let done = false;
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try { iframe.remove(); } catch (_) {}
+        resolve(result);
+      };
+
+      // Hard timeout so a slow/broken page never hangs the compare modal
+      const timer = setTimeout(() => finish(null), 20_000);
+
+      iframe.addEventListener('error', () => finish(null));
+
+      iframe.addEventListener('load', async () => {
+        try {
+          const iWin = iframe.contentWindow;
+          const iDoc = iframe.contentDocument;
+          if (!iDoc || !iWin) { finish(null); return; }
+
+          // Wait for React hydration and initial renders to settle
+          await new Promise(r => setTimeout(r, 1500));
+
+          // Scroll in multiple passes so newly inserted lazy blocks also load.
+          const getScrollHeight = () => Math.max(
+            iDoc.body?.scrollHeight || 0,
+            iDoc.documentElement?.scrollHeight || 0
+          );
+          const step = 420;
+          let prevHeight = 0;
+          for (let pass = 0; pass < 4; pass++) {
+            const maxY = getScrollHeight() + step;
+            for (let y = 0; y <= maxY; y += step) {
+              iWin.scrollTo(0, y);
+              await sleep(90);
+            }
+            await sleep(700);
+            const newHeight = getScrollHeight();
+            if (Math.abs(newHeight - prevHeight) < 180) break;
+            prevHeight = newHeight;
+          }
+
+          // Jump to known detail sections if present; some blocks request data
+          // only when scrolled near the section heading.
+          const sectionSelectors = [
+            '[data-testid="property-most-popular-facilities-wrapper"]',
+            '[data-testid="facility-group-container"]',
+            '[data-testid="facilities-subtitle"]',
+            '[data-testid="poi-block"]',
+            '[data-testid*="surrounding"]',
+          ];
+          const targets = [];
+          sectionSelectors.forEach(sel => {
+            iDoc.querySelectorAll(sel).forEach(el => targets.push(el));
+          });
+          for (const el of targets.slice(0, 30)) {
+            el.scrollIntoView({ block: 'center' });
+            await sleep(120);
+          }
+          await sleep(1200);
+
+          finish({
+            popularFacilities: extractPopularFacilities(iDoc),
+            facilityGroups:    extractFacilityGroups(iDoc),
+            areaInfo:          extractAreaInfo(iDoc),
+          });
+        } catch (err) {
+          console.warn('[BPC] iframe extraction error:', err);
+          finish(null);
+        }
+      });
+
+      document.body.appendChild(iframe);
+    });
+  }
+
+  function mergeUniqueStrings (base, extra) {
+    const merged = [];
+    const seen = new Set();
+    [base, extra].forEach(list => {
+      (list || []).forEach(item => {
+        const text = typeof item === 'string' ? item.trim() : '';
+        if (!text) return;
+        const key = text.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        merged.push(text);
+      });
+    });
+    return merged;
+  }
+
+  function mergeFacilityGroups (base, extra) {
+    const mergedByName = new Map();
+    const order = [];
+    const ingest = (groups) => {
+      (groups || []).forEach(group => {
+        const name = typeof group?.name === 'string' ? group.name.trim() : '';
+        if (!name) return;
+        const key = name.toLowerCase();
+        const desc = typeof group?.description === 'string' ? group.description.trim() : '';
+        const facs = mergeUniqueStrings([], group?.facilities || []);
+        if (!mergedByName.has(key)) {
+          mergedByName.set(key, { name, description: desc, facilities: facs });
+          order.push(key);
+          return;
+        }
+        const existing = mergedByName.get(key);
+        if (desc && desc.length > existing.description.length) {
+          existing.description = desc;
+        }
+        existing.facilities = mergeUniqueStrings(existing.facilities, facs);
+      });
+    };
+    ingest(base);
+    ingest(extra);
+    return order.map(key => mergedByName.get(key))
+      .filter(group => group.facilities.length || group.description);
+  }
+
+  function mergeAreaInfo (base, extra) {
+    const mergedByCategory = new Map();
+    const order = [];
+    const ingest = (categories) => {
+      (categories || []).forEach(category => {
+        const name = typeof category?.name === 'string' ? category.name.trim() : '';
+        if (!name) return;
+        const key = name.toLowerCase();
+        const pois = Array.isArray(category?.pois) ? category.pois : [];
+        if (!mergedByCategory.has(key)) {
+          mergedByCategory.set(key, { name, pois: [] });
+          order.push(key);
+        }
+        const target = mergedByCategory.get(key);
+        const seenPoi = new Set(target.pois.map(p => `${(p.name || '').toLowerCase()}|${(p.distance || '').toLowerCase()}`));
+        pois.forEach(poi => {
+          const poiName = typeof poi?.name === 'string' ? poi.name.trim() : '';
+          if (!poiName) return;
+          const poiType = typeof poi?.type === 'string' ? poi.type.trim() : '';
+          const poiDist = typeof poi?.distance === 'string' ? poi.distance.trim() : '';
+          const poiKey = `${poiName.toLowerCase()}|${poiDist.toLowerCase()}`;
+          if (seenPoi.has(poiKey)) return;
+          seenPoi.add(poiKey);
+          target.pois.push({ type: poiType, name: poiName, distance: poiDist });
+        });
+      });
+    };
+    ingest(base);
+    ingest(extra);
+    return order.map(key => mergedByCategory.get(key)).filter(cat => cat.pois.length);
+  }
+
+  /** Fetch and parse detailed info (facilities, area POIs) from a hotel page */
+  async function fetchHotelDetails (url) {
+    // Strip query params so we get the full hotel info page, not a booking-flow view
+    let cleanUrl = url;
+    try {
+      const u = new URL(url);
+      cleanUrl = u.origin + u.pathname;
+    } catch (_) {}
+
+    if (detailsCache.has(cleanUrl)) return detailsCache.get(cleanUrl);
+    detailsCache.set(cleanUrl, null); // mark as fetched (null = failed/empty)
+    try {
+      const fetchPage = async (extraParams = '') => {
+        const res = await fetch(cleanUrl + extraParams, {
+          credentials: 'include',
+          headers: { 'Accept': 'text/html,application/xhtml+xml', 'Accept-Language': 'en-US,en;q=0.9' },
+        });
+        if (!res.ok) return null;
+        return new DOMParser().parseFromString(await res.text(), 'text/html');
+      };
+
+      let doc = await fetchPage();
+      if (!doc) return null;
+
+      let details = {
+        popularFacilities: extractPopularFacilities(doc),
+        facilityGroups:    extractFacilityGroups(doc),
+        areaInfo:          extractAreaInfo(doc),
+      };
+
+      // If the detailed sections are missing the page may not have included the
+      // lazy-loaded content in its SSR output.  Retry with ?lang=en-us so the
+      // server has a fresh chance to render them.
+      // NOTE: popularFacilities can be present in the initial SSR even when the
+      //       full facilityGroups / areaInfo blocks are absent – so we only use
+      //       those two (not popularFacilities) as the trigger for the retry.
+      if (!details.facilityGroups.length || !details.areaInfo.length) {
+        await sleep(DETAIL_LOAD_DELAY_MS);
+        const doc2 = await fetchPage('?lang=en-us');
+        if (doc2) {
+          const d2 = {
+            popularFacilities: extractPopularFacilities(doc2),
+            facilityGroups:    extractFacilityGroups(doc2),
+            areaInfo:          extractAreaInfo(doc2),
+          };
+          if (d2.facilityGroups.length || d2.popularFacilities.length || d2.areaInfo.length) {
+            details = d2;
+            doc     = doc2;
+          }
+        }
+      }
+
+      // Enrich from a live iframe render so lazy-loaded sections triggered by
+      // scroll are captured even when the fetched HTML has only partial data.
+      const iframeDetails = await fetchHotelDetailsViaIframe(cleanUrl);
+      if (iframeDetails) {
+        details = {
+          popularFacilities: mergeUniqueStrings(details.popularFacilities, iframeDetails.popularFacilities),
+          facilityGroups:    mergeFacilityGroups(details.facilityGroups, iframeDetails.facilityGroups),
+          areaInfo:          mergeAreaInfo(details.areaInfo, iframeDetails.areaInfo),
+        };
+      }
+
+      // Diagnostics: inspect Apollo cache for facility keys
+      const inlineTexts = Array.from(doc.querySelectorAll('script:not([src])')).map(s => s.textContent);
+      const apolloText  = inlineTexts.find(t => t.trim().startsWith('{"ROOT_QUERY"'));
+      let apolloFacilityInfo = null;
+      if (apolloText) {
+        try {
+          const cache   = JSON.parse(apolloText);
+          const allKeys = Object.keys(cache);
+          const facKeys = allKeys.filter(k => /facilit|amenity|Facility/i.test(k));
+          apolloFacilityInfo = {
+            totalCacheKeys:      allKeys.length,
+            facilityRelatedKeys: facKeys.slice(0, 20),
+            sampleEntries:       facKeys.slice(0, 3).map(k => ({ key: k, val: cache[k] })),
+          };
+        } catch (_) {}
+      }
+      console.debug('[BPC] Hotel details fetched', cleanUrl, {
+        popularFacilities:            details.popularFacilities,
+        facilityGroups:               details.facilityGroups,
+        areaInfoCategories:           details.areaInfo.map(c => c.name),
+        facilityGroupContainerCount:  doc.querySelectorAll('[data-testid="facility-group-container"]').length,
+        hasApolloCache:               !!apolloText,
+        apolloFacilityInfo,
+      });
+      detailsCache.set(cleanUrl, details);
+      return details;
+    } catch (_) { return null; }
+  }
+
+  /** Most-popular-facilities list: [data-testid="property-most-popular-facilities-wrapper"] */
+  function extractPopularFacilities (doc) {
+    // Primary: named wrapper with known child class
+    const primary = Array.from(
+      doc.querySelectorAll('[data-testid="property-most-popular-facilities-wrapper"] .f6b6d2a959')
+    ).map(el => el.textContent.trim()).filter(Boolean);
+    if (primary.length) return primary;
+
+    // Fallback: any element whose data-testid contains "facility" and has text
+    const fallback = Array.from(
+      doc.querySelectorAll('[data-testid*="facility"] li, [data-testid*="facility"] span')
+    ).map(el => el.textContent.trim()).filter(t => t.length > 1 && t.length < 60);
+    return [...new Set(fallback)];
+  }
+
+  /** All facility groups and their items from the Facilities section */
+  function extractFacilityGroups (doc) {
+    const groups = [];
+    doc.querySelectorAll('[data-testid="facility-group-container"]').forEach(group => {
+      const titleEl = group.querySelector('h3');
+      if (!titleEl) return;
+      const name = titleEl.textContent.trim();
+      if (!name) return;
+
+      // Description text inside header (if exists)
+      const descEl = group.querySelector('h3 + div, h3 div + div');
+      const description = descEl ? descEl.textContent.trim() : '';
+
+      // All facility list items
+      const facilities = [];
+      group.querySelectorAll('li').forEach(item => {
+        const text = item.textContent.trim();
+        if (text) {
+          text.split('\n').forEach(line => {
+            if (line.trim()) facilities.push(line.trim());
+          });
+        }
+      });
+
+      if (facilities.length || description) {
+        groups.push({ name, facilities, description });
+      }
+    });
+
+    // Fallback 1: facility-group-container is lazy-loaded by JS and absent from the
+    // initial SSR HTML. Try extracting from the __NEXT_DATA__ embedded JSON instead.
+    if (groups.length === 0) {
+      const fromNextData = extractFacilityGroupsFromNextData(doc);
+      if (fromNextData.length > 0) return fromNextData;
+    }
+
+    // Fallback 2: extract from Apollo GraphQL client cache embedded in the page.
+    if (groups.length === 0) {
+      const fromApollo = extractFacilityGroupsFromApolloCache(doc);
+      if (fromApollo.length > 0) return fromApollo;
+    }
+
+    return groups;
+  }
+
+  /**
+   * Extract facility groups from the Apollo Client cache that booking.com embeds
+   * as an inline script starting with {"ROOT_QUERY"...}.
+   * Apollo normalizes each entity to a flat key like "FacilityGroup:123".
+   */
+  function extractFacilityGroupsFromApolloCache (doc) {
+    const scripts = Array.from(doc.querySelectorAll('script:not([src])'));
+    for (const script of scripts) {
+      const text = script.textContent.trim();
+      if (!text.startsWith('{"ROOT_QUERY"')) continue;
+      try {
+        const cache = JSON.parse(text);
+        return parseApolloFacilities(cache);
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  function parseApolloFacilities (cache) {
+    const groups = [];
+    for (const [key, val] of Object.entries(cache)) {
+      if (!val || typeof val !== 'object' || Array.isArray(val)) continue;
+      // Match cache keys like "FacilityGroup:1", "facilityGroup({...})", etc.
+      if (!/facilit/i.test(key)) continue;
+
+      const name       = val.name || val.title || val.groupName || '';
+      const facilityRefs = val.facilities || val.amenities || val.items || [];
+      const desc       = (typeof val.description === 'string') ? val.description : '';
+
+      if (!name) continue;
+
+      const facs = (Array.isArray(facilityRefs) ? facilityRefs : []).map(ref => {
+        if (typeof ref === 'string') return ref;
+        // Apollo ref: { __ref: "FacilityItem:123" }
+        if (ref?.__ref && cache[ref.__ref]) return cache[ref.__ref].name || cache[ref.__ref].title || '';
+        return ref?.name || ref?.title || '';
+      }).filter(Boolean);
+
+      if (facs.length || desc) {
+        groups.push({ name, facilities: facs, description: desc });
+      }
+    }
+    return groups;
+  }
+
+  /**
+   * Walk the __NEXT_DATA__ Next.js SSR payload looking for facility group arrays.
+   * A facility group looks like { name: string, facilities: string[] } or
+   * { name: string, description: string }.
+   */
+  function extractFacilityGroupsFromNextData (doc) {
+    const script = doc.getElementById('__NEXT_DATA__');
+    if (!script) return [];
+    try {
+      const root = JSON.parse(script.textContent);
+      const results = [];
+      findFacilityGroupsInJson(root, results, 0);
+      return results;
+    } catch (_) { return []; }
+  }
+
+  /**
+   * Return the first array property of `obj` whose items look like facility
+   * entries (strings, or objects with a name/title field).
+   * Tries well-known names first, then falls back to any qualifying array.
+   */
+  function pickFacilityArray (obj) {
+    const named = obj.facilities || obj.amenities || obj.items ||
+                  obj.features   || obj.featureList || obj.facilityList;
+    if (Array.isArray(named) && named.length) return named;
+    for (const v of Object.values(obj)) {
+      if (!Array.isArray(v) || !v.length) continue;
+      const ok = v.every(x =>
+        typeof x === 'string' ||
+        (x && typeof x === 'object' && (typeof x.name === 'string' || typeof x.title === 'string'))
+      );
+      if (ok) return v;
+    }
+    return [];
+  }
+
+  function findFacilityGroupsInJson (obj, results, depth) {
+    if (depth > 16 || !obj || typeof obj !== 'object') return;
+
+    if (Array.isArray(obj)) {
+      // Check if this array looks like a list of facility groups.
+      // A group must have a name/title AND either a facility-like array or a description.
+      const candidates = obj.filter(item =>
+        item && typeof item === 'object' &&
+        (typeof item.name === 'string' || typeof item.title === 'string') &&
+        (pickFacilityArray(item).length || typeof item.description === 'string')
+      );
+      if (candidates.length >= 1) {
+        const before = results.length;
+        candidates.forEach(g => {
+          const name    = g.name || g.title || '';
+          const rawFacs = pickFacilityArray(g);
+          const facs    = rawFacs.map(f =>
+            typeof f === 'string' ? f : (f.name || f.title || f.label || '')
+          ).filter(Boolean);
+          const desc = typeof g.description === 'string' ? g.description : '';
+          if (name && (facs.length || desc)) {
+            if (!results.some(r => r.name === name)) {
+              results.push({ name, facilities: facs, description: desc });
+            }
+          }
+        });
+        if (results.length - before >= 2) return;
+      }
+      obj.forEach(item => findFacilityGroupsInJson(item, results, depth + 1));
+      return;
+    }
+
+    // Prioritise keys that are more likely to contain facility data
+    const entries = Object.entries(obj).sort(([a], [b]) => {
+      const aFac = /facilit|amenity|feature/i.test(a) ? -1 : 0;
+      const bFac = /facilit|amenity|feature/i.test(b) ? -1 : 0;
+      return aFac - bFac;
+    });
+    for (const [, val] of entries) {
+      if (typeof val === 'object') findFacilityGroupsInJson(val, results, depth + 1);
+    }
+  }
+
+  /**
+   * Area info POI blocks: attractions, restaurants, transit, airports etc.
+   * Each block = { name: "Top attractions", pois: [{ type, name, distance }] }
+   *
+   * Structure (as of 2026-02):
+   *   [data-testid="poi-block"]
+   *     h3 > div.cc045b173b          ← category name
+   *     ul[data-testid="poi-block-list"] > li
+   *       span[role="listitem"] > div   ← row stack
+   *         div.d1bc97eb82              ← name (may contain span.f0595bb7c6 = type)
+   *         div.d0fa02509a > div.cbf0753d0c ← distance
+   */
+  function extractAreaInfo (doc) {
+    const fromDom = Array.from(doc.querySelectorAll('[data-testid="poi-block"]')).map(block => {
+      const catName = block.querySelector('h3 .cc045b173b')?.textContent.trim()
+                   || block.querySelector('h3 div')?.textContent.trim()
+                   || block.querySelector('h3')?.textContent.trim()
+                   || '';
+      const pois = Array.from(
+        block.querySelectorAll('[data-testid="poi-block-list"] li')
+      ).map(li => {
+        // Primary selector; fallback to first child of the listitem row stack
+        const stack  = li.querySelector('span[role="listitem"] > div');
+        const nameEl = li.querySelector('.d1bc97eb82')
+                    || (stack?.children?.length >= 1 ? stack.children[0] : null);
+        if (!nameEl) return null;
+
+        const typeEl = nameEl.querySelector('.f0595bb7c6');
+        const type   = typeEl?.textContent.trim() || '';
+        const clone  = nameEl.cloneNode(true);
+        clone.querySelector('.f0595bb7c6')?.remove();
+        const name = clone.textContent.trim();
+
+        const distance = li.querySelector('.cbf0753d0c')?.textContent.trim()
+                      || (stack?.children?.length >= 2 ? stack.children[1]?.textContent.trim() : '')
+                      || '';
+        return name ? { type, name, distance } : null;
+      }).filter(Boolean);
+      return catName ? { name: catName, pois } : null;
+    }).filter(Boolean);
+
+    if (fromDom.length) return fromDom;
+
+    // Fallback 1: poi-block is rendered client-side; try __NEXT_DATA__ SSR payload.
+    const fromNextData = extractAreaInfoFromNextData(doc);
+    if (fromNextData.length) return fromNextData;
+
+    // Fallback 2: Apollo GraphQL client cache.
+    return extractAreaInfoFromApolloCache(doc);
+  }
+
+  /** Walk __NEXT_DATA__ looking for POI-category arrays (attractions, transit, etc.) */
+  function extractAreaInfoFromNextData (doc) {
+    const script = doc.getElementById('__NEXT_DATA__');
+    if (!script) return [];
+    try {
+      const root = JSON.parse(script.textContent);
+      const results = [];
+      findPoiCategoriesInJson(root, results, 0);
+      return results;
+    } catch (_) { return []; }
+  }
+
+  /**
+   * Return the first array property of `obj` whose items look like POI entries
+   * (objects with a name AND some distance-like field).
+   * Tries well-known names first, then falls back to any qualifying array.
+   */
+  function pickPoiArray (obj) {
+    const DIST = x => x && typeof x === 'object' &&
+      typeof (x.name || x.title) === 'string' &&
+      (x.distance || x.distanceText || x.distanceFormatted ||
+       x.distanceInMeters || x.distanceKm || x.walkingTime || x.drivingTime);
+
+    const named = obj.pois || obj.places || obj.items ||
+                  obj.landmarks || obj.locations || obj.attractions;
+    if (Array.isArray(named) && named.some(DIST)) return named;
+
+    for (const v of Object.values(obj)) {
+      if (Array.isArray(v) && v.some(DIST)) return v;
+    }
+    return [];
+  }
+
+  function findPoiCategoriesInJson (obj, results, depth) {
+    if (depth > 16 || !obj || typeof obj !== 'object') return;
+
+    if (Array.isArray(obj)) {
+      // A POI-category array: each element has a name + a list of POI-like entries.
+      const candidates = obj.filter(item =>
+        item && typeof item === 'object' &&
+        typeof (item.name || item.categoryName || item.title) === 'string' &&
+        pickPoiArray(item).length > 0
+      );
+      if (candidates.length >= 1) {
+        const before = results.length;
+        candidates.forEach(cat => {
+          const name    = cat.name || cat.categoryName || cat.title || '';
+          const rawPois = pickPoiArray(cat);
+          const pois = rawPois.map(p => {
+            if (typeof p === 'string') return { name: p, type: '', distance: '' };
+            return {
+              name:     p.name || p.title || p.label || '',
+              type:     p.type || p.category || p.subCategory || '',
+              distance: p.distance || p.distanceText || p.distanceFormatted ||
+                        p.distanceInMeters || p.distanceKm || '',
+            };
+          }).filter(p => p.name);
+          if (name && pois.length && !results.some(r => r.name === name)) {
+            results.push({ name, pois });
+          }
+        });
+        if (results.length - before >= 2) return;
+      }
+      obj.forEach(item => findPoiCategoriesInJson(item, results, depth + 1));
+      return;
+    }
+
+    // Walk object keys – check POI/area-related keys first.
+    const entries = Object.entries(obj).sort(([a], [b]) => {
+      const aScore = /poi|attraction|area|location|nearby|surroundin|transit|transport|station|airport/i.test(a) ? -1 : 0;
+      const bScore = /poi|attraction|area|location|nearby|surroundin|transit|transport|station|airport/i.test(b) ? -1 : 0;
+      return aScore - bScore;
+    });
+    for (const [, val] of entries) {
+      if (typeof val === 'object') findPoiCategoriesInJson(val, results, depth + 1);
+    }
+  }
+
+  /** Extract POI categories from the Apollo GraphQL client cache. */
+  function extractAreaInfoFromApolloCache (doc) {
+    const scripts = Array.from(doc.querySelectorAll('script:not([src])'));
+    for (const script of scripts) {
+      const text = script.textContent.trim();
+      if (!text.startsWith('{"ROOT_QUERY"')) continue;
+      try {
+        const cache = JSON.parse(text);
+        return parseApolloPoiCategories(cache);
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  function parseApolloPoiCategories (cache) {
+    const POI_KEY = /poi|attraction|transit|transport|station|airport|surrounding|nearby/i;
+    const groups  = [];
+    for (const [key, val] of Object.entries(cache)) {
+      if (!val || typeof val !== 'object' || Array.isArray(val)) continue;
+      if (!POI_KEY.test(key)) continue;
+      const name    = val.name || val.categoryName || val.title || '';
+      if (!name) continue;
+      const poisRef = val.pois || val.places || val.items || val.locations || [];
+      const pois = (Array.isArray(poisRef) ? poisRef : []).map(ref => {
+        const item = ref?.__ref ? cache[ref.__ref] : ref;
+        if (!item) return null;
+        return {
+          name:     item.name || item.title || '',
+          type:     item.type || item.category || '',
+          distance: item.distance || item.distanceText || '',
+        };
+      }).filter(p => p?.name);
+      if (pois.length) groups.push({ name, pois });
+    }
+    return groups;
+  }
+
+  /** Update the async detail cells for one hotel (by its column index) */
+  function updateModalDetailCells (modal, idx, details) {
+    const set = (field, html) =>
+      modal.querySelectorAll(`[data-bpc-idx="${idx}"][data-bpc-field="${field}"]`)
+        .forEach(td => { td.innerHTML = html; });
+
+    const facs = details.popularFacilities;
+    set('facilities', facs.length
+      ? `<div class="bpc-facility-tags">${facs.map(f => `<span class="bpc-facility-tag">${esc(f)}</span>`).join('')}</div>`
+      : '—');
+
+    console.debug('[BPC] Rendering facilityGroups for hotel idx', idx, details.facilityGroups);
+    set('facilityGroups', renderFacilityGroups(details.facilityGroups));
+
+    const find = kw => details.areaInfo.find(c => new RegExp(kw, 'i').test(c.name))?.pois ?? [];
+    set('attractions', renderPoiList(find('attraction').slice(0, 4)));
+    set('transit',     renderPoiList(find('public\\s*transit|public\\s*transport|transit|transport|station|metro|subway|tram|train|bus').slice(0, 4)));
+    set('airport',     renderPoiList(find('airport').slice(0, 2)));
+  }
+
+  function renderPoiList (pois) {
+    if (!pois.length) return '—';
+    return `<ul class="bpc-poi-list">${pois.map(p => `
+      <li class="bpc-poi-item">
+        ${p.type ? `<span class="bpc-poi-type">${esc(p.type)}</span>` : ''}
+        <span class="bpc-poi-name">${esc(p.name)}</span>
+        <span class="bpc-poi-dist">${esc(p.distance)}</span>
+      </li>`).join('')}</ul>`;
+  }
+
+  function renderFacilityGroups (groups) {
+    if (!groups || !groups.length) return '—';
+    return `<div class="bpc-facility-groups">${
+      groups.map(g => `
+        <div class="bpc-fg-group">
+          <div class="bpc-fg-name">${esc(g.name)}</div>
+          ${g.description ? `<div class="bpc-fg-desc">${esc(g.description)}</div>` : ''}
+          ${g.facilities.length ? `<div class="bpc-fg-items">${
+            g.facilities.map(f => `<span class="bpc-facility-tag">${esc(f)}</span>`).join('')
+          }</div>` : ''}
+        </div>`).join('')
+    }</div>`;
+  }
+
+  // ─── Compare Modal ────────────────────────────────────────────────────────────
+
+  function openCompareModal () {
+    document.getElementById(COMPARE_MODAL_ID)?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = COMPARE_MODAL_ID;
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-label', 'Hotel comparison');
+
+    const fields = [
+      { label: 'Stars',    render: h => h.stars
+          ? '★'.repeat(h.stars) + '<span class="bpc-star-empty">★</span>'.repeat(Math.max(0, 5 - h.stars))
+          : '—' },
+      { label: 'Score',    render: h => h.score
+          ? `<strong class="bpc-modal-score">${esc(h.score)}</strong> <span class="bpc-score-lbl">${esc(h.scoreLabel)}</span><br><small>${esc(h.reviewCount)}</small>`
+          : '—' },
+      { label: 'Location', render: h => esc(h.location) || '—' },
+      { label: 'Distance', render: h => esc(h.distance) || '—' },
+      { label: 'Room',     render: h => esc(h.room)     || '—' },
+      { label: 'Price',    render: h => h.price
+          ? `<strong class="bpc-modal-price">${esc(h.price)}</strong>` : '—' },
+      { label: 'Was',      render: h => h.origPrice ? `<s>${esc(h.origPrice)}</s>` : '—' },
+      { label: 'Duration', render: h => esc(h.nights)   || '—' },
+      { label: 'Payment',  render: h => esc(h.payment)  || '—' },
+    ];
+
+    // Async detail rows – filled in after hotel pages are fetched
+    const detailRows = [
+      { field: 'facilities',     label: 'Top Facilities' },
+      { field: 'facilityGroups', label: 'Facilities'     },
+      { field: 'attractions',    label: 'Attractions'    },
+      { field: 'transit',        label: 'Public Transit' },
+      { field: 'airport',        label: 'Airport'        },
+    ];
+
+    modal.innerHTML = `
+      <div class="bpc-modal-backdrop"></div>
+      <div class="bpc-modal-dialog">
+        <div class="bpc-modal-header">
+          <h2 class="bpc-modal-title">Compare Hotels</h2>
+          <button class="bpc-modal-close" aria-label="Close comparison">×</button>
+        </div>
+        <div class="bpc-modal-body">
+          <table class="bpc-compare-table">
+            <thead>
+              <tr>
+                <th class="bpc-ct-label-col"></th>
+                ${compareList.map(h => `
+                  <th>
+                    <a href="${esc(h.url)}" target="_blank" rel="noopener noreferrer" class="bpc-ct-hotel-link">
+                      ${h.img ? `<img src="${esc(h.img)}" alt="" class="bpc-ct-hotel-img">` : ''}
+                      <span class="bpc-ct-hotel-name">${esc(h.name)}</span>
+                    </a>
+                  </th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${fields.map(f => `
+                <tr>
+                  <td class="bpc-ct-label-col">${esc(f.label)}</td>
+                  ${compareList.map(h => `<td>${f.render(h)}</td>`).join('')}
+                </tr>`).join('')}
+              <tr class="bpc-section-divider">
+                <td colspan="${compareList.length + 1}">
+                  More Details <span class="bpc-fetching-notice">loading…</span>
+                </td>
+              </tr>
+              ${detailRows.map(({ field, label }) => `
+                <tr>
+                  <td class="bpc-ct-label-col">${esc(label)}</td>
+                  ${compareList.map((_, i) => `
+                    <td data-bpc-idx="${i}" data-bpc-field="${field}">
+                      <div class="bpc-loading"></div>
+                    </td>`).join('')}
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    modal.querySelector('.bpc-modal-backdrop')
+      .addEventListener('click', () => modal.remove());
+    modal.querySelector('.bpc-modal-close')
+      .addEventListener('click', () => modal.remove());
+    document.addEventListener('keydown', function onEsc (e) {
+      if (e.key === 'Escape') { modal.remove(); document.removeEventListener('keydown', onEsc); }
+    });
+
+    document.body.appendChild(modal);
+
+    // Fetch each hotel's detail page in parallel and fill in the async rows
+    let remaining = compareList.length;
+    const allFields = detailRows.map(r => r.field);
+    compareList.forEach((h, idx) => {
+      fetchHotelDetails(h.url).then(details => {
+        if (!document.getElementById(COMPARE_MODAL_ID)) return; // modal was closed
+        if (details) {
+          updateModalDetailCells(modal, idx, details);
+        } else {
+          allFields.forEach(field =>
+            modal.querySelectorAll(`[data-bpc-idx="${idx}"][data-bpc-field="${field}"]`)
+              .forEach(td => { td.textContent = '—'; })
+          );
+        }
+        if (--remaining === 0) modal.querySelector('.bpc-fetching-notice')?.remove();
+      });
+    });
+  }
+
+  // ─── Comparison helpers ───────────────────────────────────────────────────────
+
+  /** HTML-escape a string to prevent XSS when injecting into innerHTML */
+  function esc (str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function showCompareToast (msg) {
+    document.querySelector('.bpc-toast')?.remove();
+    const t = document.createElement('div');
+    t.className   = 'bpc-toast';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2500);
+  }
 
   // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
