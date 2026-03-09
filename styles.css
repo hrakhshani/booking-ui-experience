@@ -75,31 +75,34 @@
   box-shadow: 0 0 0 1px rgba(234, 88, 12, 0.25);
 }
 
-/* ── Loading indicator (pulsing green circle) ───────────────────────────── */
+/* ── Loading indicator (green spinner) ──────────────────────────────────── */
 .bpc-price-badge .bpc-loading,
 .bpc-feature-loading,
 .bpc-modal-loader .bpc-loading {
-  --bpc-loader-size: 10px;
+  --bpc-loader-size: 12px;
   display: inline-block;
   width: var(--bpc-loader-size);
   height: var(--bpc-loader-size);
   border-radius: 50%;
-  background: #22c55e;
-  animation: bpc-loader-pulse 1.2s ease-in-out infinite;
+  background: transparent;
+  border: 2px solid #e5e5e5;
+  border-top: 2px solid #22c55e;
+  animation: bpc-spin 1s linear infinite;
   vertical-align: middle;
+  flex-shrink: 0;
 }
 
 .bpc-feature-loading {
-  --bpc-loader-size: 8px;
+  --bpc-loader-size: 10px;
 }
 
 .bpc-price-badge .bpc-loading.bpc-loading-exit {
   animation: bpc-loader-close 170ms ease forwards !important;
 }
 
-@keyframes bpc-loader-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%       { opacity: 0.45; transform: scale(0.75); }
+@keyframes bpc-spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 @keyframes bpc-loader-close {

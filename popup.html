@@ -64,15 +64,36 @@
     }
 
     .status-dot {
-      width: 8px;
-      height: 8px;
+      width: 14px;
+      height: 14px;
       border-radius: 50%;
       flex-shrink: 0;
-      background: #ccc;
+      border: 2px solid #e5e5e5;
+      border-top: 2px solid #22c55e;
+      background: transparent;
+      animation: status-spin 1s linear infinite;
     }
 
-    .status-dot.active   { background: #28a745; }
-    .status-dot.inactive { background: #adb5bd; }
+    @keyframes status-spin {
+      0%   { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .status-dot.active {
+      width: 8px;
+      height: 8px;
+      border: none;
+      background: #28a745;
+      animation: none;
+    }
+
+    .status-dot.inactive {
+      width: 8px;
+      height: 8px;
+      border: none;
+      background: #adb5bd;
+      animation: none;
+    }
 
     .status-text {
       font-weight: 600;
