@@ -2,7 +2,8 @@
   "manifest_version": 3,
   "name": "Booking.com Price Calendar",
   "version": "1.0.0",
-  "description": "Shows hotel price stats (min/avg/max) on the Booking.com date picker — like Google Flights' price calendar.",
+  "description": "A personal UX layer built on top of Booking.com — showing hotel price stats on the date picker so you can pick the cheapest dates at a glance. A proof-of-concept for building your own browser experiences on any website.",
+  "keywords": ["booking.com", "hotel prices", "price calendar", "date picker", "travel", "browser extension", "custom UX", "user experience", "web augmentation"],
   "permissions": ["activeTab", "tabs", "storage"],
   "host_permissions": ["https://www.booking.com/*"],
   "content_scripts": [
