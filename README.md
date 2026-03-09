@@ -1,6 +1,22 @@
 # Booking.com Price Calendar
 
-A high-level user-experience experiment for Booking.com search results. It adds on-the-fly hotel price context inside the date-picker so users can choose better dates faster, without needing access to the source code.
+> **A glimpse of what's coming:** In the near future, users will be free to build their own browsing experiences on top of any website — no access to source code required, no permission needed from the platform. This extension is one example of that vision: a personal UX layer I built for myself on top of Booking.com, solving a real need I had.
+
+The extension adds hotel price context directly into the Booking.com date-picker. Price badges appear on each calendar day so you can instantly spot the cheapest check-in window — the same idea as Google Flights' price calendar, but for hotels, built entirely from the outside.
+
+---
+
+## The Bigger Picture
+
+Web extensions are proof that you don't need to wait for a platform to build the experience you want. Anyone can:
+
+- Augment any website's UI with data it doesn't show you
+- Automate workflows that the platform makes tedious
+- Surface insights hidden in plain sight across pages
+
+This project is a concrete, working example of that idea. The pattern — detect a UI element, fetch relevant data in the background, inject a richer layer on top — can be applied to almost any site. Fork it, adapt it, build your own version for the use case you actually have.
+
+---
 
 ## Installation
 
@@ -28,7 +44,7 @@ A high-level user-experience experiment for Booking.com search results. It adds 
 2. On the results page, click the check-in or check-out date field to open the calendar.
 3. Price badges appear automatically on each day.
    - The price shown is the **minimum rate** across visible hotel listings.
-   - Colour: 🟢 green = cheapest third · 🟡 yellow = mid · 🔴 red = most expensive third.
+   - Colour: green = cheapest third · yellow = mid · red = most expensive third.
 4. **Hover** any day with a price badge for a tooltip showing min / avg / max.
 
 > **Tip:** The extension fetches prices for every day shown in the calendar.
