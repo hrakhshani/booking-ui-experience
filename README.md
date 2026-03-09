@@ -6,6 +6,10 @@ The extension adds hotel price context directly into the Booking.com date-picker
 
 ---
 
+![Demo](data/demo.gif)
+
+---
+
 ## The Bigger Picture
 
 Web extensions are proof that you don't need to wait for a platform to build the experience you want. Anyone can:
